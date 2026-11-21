@@ -64,7 +64,7 @@ describe("createAwsPricer", () => {
     expect(result.prices.map((p) => [p.cost, p.error])).toEqual([
       [5, undefined],
       [undefined, "BAD_REQUEST: No matching usage"],
-      [undefined, "the API returned no price for this line"],
+      [undefined, undefined],
     ]);
   });
 

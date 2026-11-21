@@ -7,7 +7,7 @@ import type { Msg } from "../src/types.js";
 
 const JAPANESE = /[぀-ヿ一-龯]/;
 
-/** Attributes that reach every text the estimators can produce. */
+/** Attributes that reach every place in src/resources.ts that builds a text. */
 const SAMPLES: Array<
   [string, Record<string, unknown>, Record<string, unknown>?, Record<string, unknown>?]
 > = [
@@ -163,6 +163,45 @@ const SAMPLES: Array<
     { cluster_config: [{ instance_count: true }] },
   ],
   ["aws_s3_bucket", {}],
+  // Branches reached only with these combinations.
+  [
+    "aws_db_instance",
+    { engine: "mysql", instance_class: "db.t3.micro", multi_az: false, allocated_storage: 20 },
+    { storage_type: true },
+  ],
+  [
+    "aws_db_instance",
+    {
+      engine: "mysql",
+      instance_class: "db.t3.micro",
+      multi_az: false,
+      allocated_storage: 20,
+      storage_type: "io1",
+    },
+    { iops: true },
+  ],
+  ["aws_elasticache_cluster", {}, { engine: true }, { configured: new Set(["engine"]) }],
+  ["aws_rds_cluster", {}, { engine: true }],
+  ["aws_rds_cluster_instance", {}, { engine: true }],
+  ["aws_rds_cluster_instance", { engine: "neptune" }],
+  ["aws_rds_cluster_instance", { engine: "aurora-mysql" }, { instance_class: true }],
+  ["aws_opensearch_domain", {}, { cluster_config: true }],
+  [
+    "aws_opensearch_domain",
+    {
+      cluster_config: [{ instance_type: "r6g.large.search" }],
+      ebs_options: [{ ebs_enabled: true, volume_type: "gp3" }],
+    },
+    { ebs_options: [{ volume_size: true }] },
+  ],
+  [
+    "aws_opensearch_domain",
+    {
+      cluster_config: [{ instance_type: "r6g.large.search" }],
+      ebs_options: [{ ebs_enabled: true, volume_type: "io1", volume_size: 10 }],
+    },
+    { ebs_options: [{ iops: true }] },
+  ],
 ];
 
 describe("Japanese texts", () => {
@@ -224,5 +263,58 @@ describe("Japanese texts", () => {
     expect(body).toContain("リソースの種類 aws_s3_bucket には対応していない");
     expect(body).toContain("ルートボリュームのサイズ（AMI で決まる）が apply まで分からない");
     expect(body).toContain("NAT ゲートウェイ（730 時間）");
+  });
+
+  it("translate the texts estimatePlan adds: before-the-change parts and prices AWS did not return", async () => {
+    const pricer: Pricer = async (lines) => ({
+      prices: lines.map((line) =>
+        line.usageType.includes("NatGateway") ? { line } : { line, cost: 10 },
+      ),
+    });
+    const plan: TerraformPlan = {
+      resource_changes: [
+        {
+          address: "aws_nat_gateway.a",
+          type: "aws_nat_gateway",
+          mode: "managed",
+          change: { actions: ["create"], after: {} },
+        },
+        {
+          address: "aws_db_instance.d",
+          type: "aws_db_instance",
+          mode: "managed",
+          change: {
+            actions: ["update"],
+            before: {
+              engine: "mysql",
+              instance_class: "db.t3.micro",
+              multi_az: false,
+              allocated_storage: 500,
+              storage_type: "gp3",
+              iops: 15000,
+            },
+            after: {
+              engine: "mysql",
+              instance_class: "db.t3.micro",
+              multi_az: false,
+              allocated_storage: 500,
+              storage_type: "gp3",
+            },
+          },
+        },
+      ],
+    };
+    const body = renderComment(await estimatePlan(plan, "ap-northeast-1", pricer), undefined, {
+      region: "ap-northeast-1",
+      rateType: "BEFORE_DISCOUNTS",
+      tag: "",
+      language: "ja",
+    });
+    expect(body).toContain(
+      "AWS が APN1-NatGateway-Hours / NatGateway の料金を返さなかった（API の応答にこの行の料金がなかった）",
+    );
+    expect(body).toContain("変更前: 基準を超える gp3 の IOPS とスループットには対応していない");
+    expect(body).not.toContain("before the change");
+    expect(body).not.toContain("the API returned no price");
   });
 });

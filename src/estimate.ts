@@ -184,8 +184,8 @@ export async function estimatePlan(
         type: p.change.type,
         action: p.action,
         reason: msg(
-          `AWS could not price ${failed.line.usageType} / ${failed.line.operation} (${failed.error})`,
-          `AWS が ${failed.line.usageType} / ${failed.line.operation} の料金を返さなかった（${failed.error}）`,
+          `AWS could not price ${failed.line.usageType} / ${failed.line.operation} (${failed.error ?? "the API returned no price for this line"})`,
+          `AWS が ${failed.line.usageType} / ${failed.line.operation} の料金を返さなかった（${failed.error ?? "API の応答にこの行の料金がなかった"}）`,
         ),
       });
       continue;

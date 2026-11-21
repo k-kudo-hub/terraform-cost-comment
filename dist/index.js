@@ -55811,7 +55811,7 @@ function createAwsPricer(rateType, client = new import_client_bcm_pricing_calcul
         else
           prices.push({
             line,
-            error: errors.get(key) ?? "the API returned no price for this line"
+            error: errors.get(key)
           });
       });
     }
@@ -55987,6 +55987,7 @@ var W = {
   membership: msg("replication group membership", "\u30EC\u30D7\u30EA\u30B1\u30FC\u30B7\u30E7\u30F3\u30B0\u30EB\u30FC\u30D7\u306B\u52A0\u308F\u308B\u304B")
 };
 var DATA_TRANSFER = msg("data transfer", "\u30C7\u30FC\u30BF\u8EE2\u9001");
+var storageNotSupported = (type) => msg(`${type} storage is not supported`, `\u30B9\u30C8\u30EC\u30FC\u30B8\u306E\u7A2E\u985E\u300C${type}\u300D\u306B\u306F\u5BFE\u5FDC\u3057\u3066\u3044\u306A\u3044`);
 var GP3_ABOVE_BASELINE = msg(
   "gp3 IOPS and throughput above the baseline are not supported",
   "\u57FA\u6E96\u3092\u8D85\u3048\u308B gp3 \u306E IOPS \u3068\u30B9\u30EB\u30FC\u30D7\u30C3\u30C8\u306B\u306F\u5BFE\u5FDC\u3057\u3066\u3044\u306A\u3044"
@@ -56241,7 +56242,7 @@ var dbInstance = (attrs, unknown, prefix, env2) => {
   } else {
     const storage = RDS_STORAGE[storageType];
     if (storage === void 0) {
-      partial.push(notSupported(W.storageType, storageType));
+      partial.push(storageNotSupported(storageType));
     } else {
       lines.push({
         serviceCode: "AmazonRDS",
@@ -56647,7 +56648,7 @@ var openSearchDomain = (attrs, unknown, prefix, env2) => {
     if (size === void 0 || volumeType === void 0) {
       partial.push(unknownUntilApply(W.ebsStorage));
     } else if (storage === void 0) {
-      partial.push(notSupported(W.storageType, volumeType));
+      partial.push(storageNotSupported(volumeType));
     } else {
       lines.push(line(storage, size * count, storageLine(volumeType, size, ` \xD7 ${count}`)));
       const iops = num(ebs, "iops");
@@ -56786,8 +56787,8 @@ async function estimatePlan(plan, region, pricer) {
         type: p3.change.type,
         action: p3.action,
         reason: msg(
-          `AWS could not price ${failed.line.usageType} / ${failed.line.operation} (${failed.error})`,
-          `AWS \u304C ${failed.line.usageType} / ${failed.line.operation} \u306E\u6599\u91D1\u3092\u8FD4\u3055\u306A\u304B\u3063\u305F\uFF08${failed.error}\uFF09`
+          `AWS could not price ${failed.line.usageType} / ${failed.line.operation} (${failed.error ?? "the API returned no price for this line"})`,
+          `AWS \u304C ${failed.line.usageType} / ${failed.line.operation} \u306E\u6599\u91D1\u3092\u8FD4\u3055\u306A\u304B\u3063\u305F\uFF08${failed.error ?? "API \u306E\u5FDC\u7B54\u306B\u3053\u306E\u884C\u306E\u6599\u91D1\u304C\u306A\u304B\u3063\u305F"}\uFF09`
         )
       });
       continue;
@@ -56890,7 +56891,7 @@ var EN = {
   gapTitle: (n3) => `#### \u26A0\uFE0F Not estimated (${n3})`,
   gapColumns: ["Resource", "Action", "What is missing"],
   leftOutTitle: "What the estimate leaves out",
-  leftOutIntro: "Not priced (mostly charges that depend on usage, which a plan cannot tell):",
+  leftOutIntro: "Mostly charges that depend on usage, which a plan cannot tell:",
   otherProviders: (n3) => `${n3} changed resource${n3 === 1 ? "" : "s"} of non-AWS providers (such as random or null), not priced.`,
   assumptionsIntro: "Assumptions:",
   assumptions: (ctx) => [
@@ -56927,7 +56928,7 @@ var JA = {
   gapTitle: (n3) => `#### \u26A0\uFE0F \u8A66\u7B97\u3067\u304D\u306A\u304B\u3063\u305F\u3082\u306E\uFF08${n3} \u4EF6\uFF09`,
   gapColumns: ["\u30EA\u30BD\u30FC\u30B9", "\u64CD\u4F5C", "\u8A66\u7B97\u3067\u304D\u306A\u304B\u3063\u305F\u3082\u306E"],
   leftOutTitle: "\u8A66\u7B97\u306B\u542B\u307E\u308C\u306A\u3044\u3082\u306E",
-  leftOutIntro: "\u8A66\u7B97\u306B\u542B\u3081\u3066\u3044\u306A\u3044\u3082\u306E\uFF08\u591A\u304F\u306F\u4F7F\u7528\u91CF\u3067\u6C7A\u307E\u308A\u3001plan \u304B\u3089\u306F\u5206\u304B\u3089\u306A\u3044\u6599\u91D1\uFF09:",
+  leftOutIntro: "\u591A\u304F\u306F\u4F7F\u7528\u91CF\u3067\u6C7A\u307E\u308A\u3001plan \u304B\u3089\u306F\u5206\u304B\u3089\u306A\u3044\u6599\u91D1:",
   otherProviders: (n3) => `AWS \u4EE5\u5916\u306E\u30D7\u30ED\u30D0\u30A4\u30C0\u30FC\uFF08\u4F8B: random\u3001null\uFF09\u306E\u30EA\u30BD\u30FC\u30B9 ${n3} \u4EF6\u306F\u8A66\u7B97\u3057\u3066\u3044\u307E\u305B\u3093\u3002`,
   assumptionsIntro: "\u8A66\u7B97\u306E\u524D\u63D0:",
   assumptions: (ctx) => [

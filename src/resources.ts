@@ -99,6 +99,8 @@ const W = {
 };
 
 const DATA_TRANSFER = msg("data transfer", "データ転送");
+const storageNotSupported = (type: string): Msg =>
+  msg(`${type} storage is not supported`, `ストレージの種類「${type}」には対応していない`);
 const GP3_ABOVE_BASELINE = msg(
   "gp3 IOPS and throughput above the baseline are not supported",
   "基準を超える gp3 の IOPS とスループットには対応していない",
@@ -438,7 +440,7 @@ const dbInstance: Estimator = (attrs, unknown, prefix, env) => {
   } else {
     const storage = RDS_STORAGE[storageType];
     if (storage === undefined) {
-      partial.push(notSupported(W.storageType, storageType));
+      partial.push(storageNotSupported(storageType));
     } else {
       lines.push({
         serviceCode: "AmazonRDS",
@@ -915,7 +917,7 @@ const openSearchDomain: Estimator = (attrs, unknown, prefix, env) => {
     if (size === undefined || volumeType === undefined) {
       partial.push(unknownUntilApply(W.ebsStorage));
     } else if (storage === undefined) {
-      partial.push(notSupported(W.storageType, volumeType));
+      partial.push(storageNotSupported(volumeType));
     } else {
       lines.push(line(storage, size * count, storageLine(volumeType, size, ` × ${count}`)));
       const iops = num(ebs, "iops");

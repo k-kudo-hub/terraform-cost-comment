@@ -52,7 +52,7 @@ PR の説明に `cost-expectation: +50` と書いたとき:
 
 | リソース | 操作 | 試算できなかったもの |
 |---|---|---|
-| `aws_s3_bucket.logs` | 作成 | resource type aws_s3_bucket is not supported |
+| `aws_s3_bucket.logs` | 作成 | リソースの種類 aws_s3_bucket には対応していない |
 ```
 
 実際のコメントには、試算した使用量の内訳・試算に含まれないもの・試算の前提が、折りたたみで続きます。

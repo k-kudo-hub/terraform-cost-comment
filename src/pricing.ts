@@ -18,6 +18,7 @@ export interface LinePrice {
   line: UsageLine;
   /** Monthly cost in USD. Undefined when the line could not be priced. */
   cost?: number;
+  /** "errorCode: errorMessage" from AWS. Undefined when the response has no entry for the line. */
   error?: string;
 }
 
@@ -74,7 +75,7 @@ export function createAwsPricer(
         else
           prices.push({
             line,
-            error: errors.get(key) ?? "the API returned no price for this line",
+            error: errors.get(key),
           });
       });
     }

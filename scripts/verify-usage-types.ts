@@ -98,7 +98,7 @@ const NOT_OFFERED = [/^(APE2|APS8)-RDS:(Multi-AZ-)?StorageUsage$/];
 
 const lines = [...unique.values()];
 const result = await createAwsPricer("BEFORE_DISCOUNTS")(lines);
-const notPriced = result.prices.filter((p) => p.error !== undefined);
+const notPriced = result.prices.filter((p) => p.cost === undefined);
 const expected = notPriced.filter((p) => NOT_OFFERED.some((re) => re.test(p.line.usageType)));
 const failed = notPriced.filter((p) => !expected.includes(p));
 console.log(
@@ -106,6 +106,8 @@ console.log(
     ` (${expected.length} more are not offered in their region, as expected)`,
 );
 for (const p of failed) {
-  console.log(`  ${p.line.serviceCode} ${p.line.usageType} ${p.line.operation}: ${p.error}`);
+  console.log(
+    `  ${p.line.serviceCode} ${p.line.usageType} ${p.line.operation}: ${p.error ?? "no price returned"}`,
+  );
 }
 process.exitCode = failed.length === 0 ? 0 : 1;

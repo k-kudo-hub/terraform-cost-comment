@@ -124,7 +124,7 @@ const EN: Messages = {
   gapTitle: (n) => `#### ⚠️ Not estimated (${n})`,
   gapColumns: ["Resource", "Action", "What is missing"],
   leftOutTitle: "What the estimate leaves out",
-  leftOutIntro: "Not priced (mostly charges that depend on usage, which a plan cannot tell):",
+  leftOutIntro: "Mostly charges that depend on usage, which a plan cannot tell:",
   otherProviders: (n) =>
     `${n} changed resource${n === 1 ? "" : "s"} of non-AWS providers (such as random or null), not priced.`,
   assumptionsIntro: "Assumptions:",
@@ -168,7 +168,7 @@ const JA: Messages = {
   gapTitle: (n) => `#### ⚠️ 試算できなかったもの（${n} 件）`,
   gapColumns: ["リソース", "操作", "試算できなかったもの"],
   leftOutTitle: "試算に含まれないもの",
-  leftOutIntro: "試算に含めていないもの（多くは使用量で決まり、plan からは分からない料金）:",
+  leftOutIntro: "多くは使用量で決まり、plan からは分からない料金:",
   otherProviders: (n) =>
     `AWS 以外のプロバイダー（例: random、null）のリソース ${n} 件は試算していません。`,
   assumptionsIntro: "試算の前提:",

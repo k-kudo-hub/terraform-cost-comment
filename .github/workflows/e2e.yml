@@ -42,7 +42,6 @@ jobs:
         uses: ./
         with:
           plan-json: e2e/plan.json
-          language: ja
           comment-tag: e2e
       - name: Check the outputs
         run: |

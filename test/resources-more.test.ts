@@ -487,6 +487,18 @@ describe("fixes from the review of the added resources", () => {
     ]);
   });
 
+  it("names EBS storage that may be written as a dynamic block it cannot read", () => {
+    const r = usage(
+      "aws_opensearch_domain",
+      { cluster_config: [{ instance_type: "r6g.large.search", instance_count: 1 }] },
+      TOKYO,
+      { ebs_options: true },
+      configured("domain_name", "cluster_config"),
+    );
+    expect(r.partial).toEqual([]);
+    expect(r.excluded).toContain("OpenSearch EBS storage written as a dynamic ebs_options block");
+  });
+
   it("cannot estimate an OpenSearch domain without an instance type", () => {
     expect(usage("aws_opensearch_domain", {}).unestimable).toBeDefined();
   });

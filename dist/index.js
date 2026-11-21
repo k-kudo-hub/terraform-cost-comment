@@ -56417,7 +56417,12 @@ var openSearchDomain = (attrs, unknown, prefix, env2) => {
   if (cluster.warm_enabled === true) partial.push("UltraWarm nodes are not supported");
   const ebs = blocks(attrs, "ebs_options")[0];
   const eu = blockUnknown(unknown, "ebs_options", 0);
-  const ebsUnknown = eu.ebs_enabled === true || isUnknown(unknown, "ebs_options") && env2.context.configured?.has("ebs_options") !== false;
+  const ebsOptionsUnknown = isUnknown(unknown, "ebs_options");
+  const ebsUnknown = eu.ebs_enabled === true || ebsOptionsUnknown && env2.context.configured?.has("ebs_options") !== false;
+  const excluded = ["OpenSearch snapshots and data transfer"];
+  if (ebsOptionsUnknown && !ebsUnknown) {
+    excluded.push("OpenSearch EBS storage written as a dynamic ebs_options block");
+  }
   if (ebsUnknown) {
     partial.push("EBS storage is not known until apply");
   } else if (ebs !== void 0 && ebs.ebs_enabled === true) {
@@ -56443,7 +56448,7 @@ var openSearchDomain = (attrs, unknown, prefix, env2) => {
       }
     }
   }
-  return { lines, partial, excluded: ["OpenSearch snapshots and data transfer"] };
+  return { lines, partial, excluded };
 };
 var ESTIMATORS = {
   aws_instance: instance,

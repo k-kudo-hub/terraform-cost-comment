@@ -522,7 +522,6 @@ function cacheNodes(
 }
 
 const elasticacheCluster: Estimator = (attrs, unknown, prefix, env) => {
-  // A member of a replication group is priced with the group.
   // With replication_group_id the cluster adds a read replica to the group: one more node that
   // the group's num_cache_clusters does not count, whose node type comes from the group.
   const group = readSet(str, attrs, unknown, "replication_group_id", env);
@@ -722,9 +721,16 @@ const openSearchDomain: Estimator = (attrs, unknown, prefix, env) => {
 
   const ebs = blocks(attrs, "ebs_options")[0];
   const eu = blockUnknown(unknown, "ebs_options", 0);
+  // ebs_options is "known after apply" both when it is left out and when it is written as a
+  // dynamic block (which the configuration does not show), so the two cannot be told apart.
+  const ebsOptionsUnknown = isUnknown(unknown, "ebs_options");
   const ebsUnknown =
     eu.ebs_enabled === true ||
-    (isUnknown(unknown, "ebs_options") && env.context.configured?.has("ebs_options") !== false);
+    (ebsOptionsUnknown && env.context.configured?.has("ebs_options") !== false);
+  const excluded = ["OpenSearch snapshots and data transfer"];
+  if (ebsOptionsUnknown && !ebsUnknown) {
+    excluded.push("OpenSearch EBS storage written as a dynamic ebs_options block");
+  }
   if (ebsUnknown) {
     partial.push("EBS storage is not known until apply");
   } else if (ebs !== undefined && ebs.ebs_enabled === true) {
@@ -750,7 +756,7 @@ const openSearchDomain: Estimator = (attrs, unknown, prefix, env) => {
       }
     }
   }
-  return { lines, partial, excluded: ["OpenSearch snapshots and data transfer"] };
+  return { lines, partial, excluded };
 };
 
 // ---------------------------------------------------------------- registry

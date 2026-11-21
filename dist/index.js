@@ -55977,8 +55977,13 @@ function ebsLines(spec, prefix) {
 function read(get2, attrs, unknown, key) {
   return isUnknown(unknown, key) ? "unknown" : get2(attrs, key);
 }
-var ebsVolume = (attrs, unknown, prefix) => {
-  const type = read(str, attrs, unknown, "type");
+var notConfigured = (env2, key) => env2.context.configured !== void 0 && !env2.context.configured.has(key);
+function readSet(get2, attrs, unknown, key, env2) {
+  const v = read(get2, attrs, unknown, key);
+  return v === "unknown" && notConfigured(env2, key) ? void 0 : v;
+}
+var ebsVolume = (attrs, unknown, prefix, env2) => {
+  const type = readSet(str, attrs, unknown, "type", env2);
   const result = ebsLines(
     {
       label: "volume",
@@ -56067,7 +56072,7 @@ var RDS_STORAGE = {
     iops: { single: "RDS:IO2-PIOPS", multi: "RDS:Multi-AZ-IO2-PIOPS" }
   }
 };
-var dbInstance = (attrs, unknown, prefix) => {
+var dbInstance = (attrs, unknown, prefix, env2) => {
   const engine = str(attrs, "engine");
   if (engine === void 0 || isUnknown(unknown, "engine")) {
     return unestimable("engine is not known until apply");
@@ -56078,20 +56083,23 @@ var dbInstance = (attrs, unknown, prefix) => {
   if (cls === void 0 || isUnknown(unknown, "instance_class")) {
     return unestimable("instance class is not known until apply");
   }
-  if (isUnknown(unknown, "multi_az")) return unestimable("Multi-AZ is not known until apply");
-  const multiAz = attrs.multi_az === true;
+  const multiAzValue = readSet((a5, k5) => a5[k5], attrs, unknown, "multi_az", env2);
+  if (multiAzValue === "unknown") return unestimable("Multi-AZ is not known until apply");
+  const multiAz = multiAzValue === true;
+  const azNote = multiAzValue === void 0 ? " Single-AZ (multi_az not set)" : "";
   const lines = [
     {
       serviceCode: "AmazonRDS",
       usageType: `${prefix}${multiAz ? "Multi-AZUsage" : "InstanceUsage"}:${cls}`,
       operation: operation2,
       amount: HOURS_PER_MONTH,
-      description: `${cls} ${engine}${multiAz ? " Multi-AZ" : ""} (${HOURS_PER_MONTH} h)`
+      description: `${cls} ${engine}${multiAz ? " Multi-AZ" : azNote} (${HOURS_PER_MONTH} h)`
     }
   ];
   const partial = [];
   const excluded = [];
-  const storageType = read(str, attrs, unknown, "storage_type");
+  const setType = readSet(str, attrs, unknown, "storage_type", env2);
+  const storageType = setType !== void 0 ? setType : typeof attrs.iops === "number" ? "io1" : "gp3";
   const size = read(num, attrs, unknown, "allocated_storage");
   if (size === void 0 || size === "unknown") {
     partial.push("storage size is not known until apply");
@@ -56241,8 +56249,9 @@ function cacheNodes(engine, nodeType, nodes5, prefix) {
     excluded: ["ElastiCache backup storage beyond the free allowance", "data transfer"]
   };
 }
-var elasticacheCluster = (attrs, unknown, prefix) => {
-  if (str(attrs, "replication_group_id") !== void 0 || isUnknown(unknown, "replication_group_id")) {
+var elasticacheCluster = (attrs, unknown, prefix, env2) => {
+  const group4 = readSet(str, attrs, unknown, "replication_group_id", env2);
+  if (group4 !== void 0) {
     return { lines: [], partial: [], excluded: [] };
   }
   if (isUnknown(unknown, "engine")) return unestimable("engine is not known until apply");
@@ -56255,11 +56264,14 @@ var elasticacheCluster = (attrs, unknown, prefix) => {
     prefix
   );
 };
-var elasticacheReplicationGroup = (attrs, unknown, prefix) => {
-  if (isUnknown(unknown, "engine")) return unestimable("engine is not known until apply");
-  const shards = read(num, attrs, unknown, "num_node_groups");
-  const replicas = read(num, attrs, unknown, "replicas_per_node_group");
-  const clusters = read(num, attrs, unknown, "num_cache_clusters");
+var elasticacheReplicationGroup = (attrs, unknown, prefix, env2) => {
+  if (readSet(str, attrs, unknown, "engine", env2) === "unknown") {
+    return unestimable("engine is not known until apply");
+  }
+  const shards = readSet(num, attrs, unknown, "num_node_groups", env2);
+  const replicas = readSet(num, attrs, unknown, "replicas_per_node_group", env2);
+  const setClusters = readSet(num, attrs, unknown, "num_cache_clusters", env2);
+  const clusters = setClusters === void 0 && shards === void 0 && replicas === void 0 ? 1 : setClusters;
   let nodes5;
   if (typeof shards === "number" && shards > 1) {
     nodes5 = typeof replicas === "number" ? shards * (replicas + 1) : void 0;
@@ -56695,13 +56707,11 @@ async function estimatePlan(plan, region, pricer) {
       otherProviderCount += 1;
       continue;
     }
-    const context3 = rc.type === "aws_rds_cluster_instance" ? {
-      auroraStorageType: auroraStorageType(
-        rc,
-        plan.resource_changes ?? [],
-        plan.configuration?.root_module
-      )
-    } : {};
+    const config = configResource(plan.configuration?.root_module, rc.address);
+    const context3 = {
+      configured: config === void 0 ? void 0 : new Set(Object.keys(config.expressions ?? {})),
+      auroraStorageType: rc.type === "aws_rds_cluster_instance" ? auroraStorageType(rc, plan.resource_changes ?? [], plan.configuration?.root_module) : void 0
+    };
     const sides = {
       before: action === "create" ? void 0 : estimateUsage(rc.type, rc.change.before ?? {}, {}, region, context3),
       after: action === "delete" ? void 0 : estimateUsage(

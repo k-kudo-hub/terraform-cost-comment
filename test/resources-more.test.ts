@@ -348,3 +348,89 @@ describe("aws_db_instance provisioned IOPS storage", () => {
     expect(r.partial).toEqual(["provisioned IOPS is not known until apply"]);
   });
 });
+
+describe("attributes left out of the configuration take their defaults", () => {
+  const configured = (...keys: string[]) => ({ configured: new Set(keys) });
+
+  it("prices an RDS instance without multi_az as Single-AZ and says so", () => {
+    const r = usage(
+      "aws_db_instance",
+      { engine: "postgres", instance_class: "db.t3.micro", allocated_storage: 20 },
+      TOKYO,
+      { multi_az: true, storage_type: true, iops: true },
+      configured("engine", "instance_class", "allocated_storage"),
+    );
+    expect(rows(r)).toEqual([
+      ["AmazonRDS", "APN1-InstanceUsage:db.t3.micro", "CreateDBInstance:0014", 730],
+      ["AmazonRDS", "APN1-RDS:GP3-Storage", "CreateDBInstance:0014", 20],
+    ]);
+    expect(r.lines[0]?.description).toContain("multi_az not set");
+    expect(r.partial).toEqual([]);
+  });
+
+  it("still cannot estimate multi_az set from a value known only after apply", () => {
+    const r = usage(
+      "aws_db_instance",
+      { engine: "postgres", instance_class: "db.t3.micro", allocated_storage: 20 },
+      TOKYO,
+      { multi_az: true },
+      configured("engine", "instance_class", "allocated_storage", "multi_az"),
+    );
+    expect(r.unestimable).toBeDefined();
+  });
+
+  it("uses io1 as the RDS default storage when iops is set", () => {
+    const r = usage(
+      "aws_db_instance",
+      { engine: "mysql", instance_class: "db.m5.large", allocated_storage: 100, iops: 1000 },
+      TOKYO,
+      { storage_type: true, multi_az: true },
+      configured("engine", "instance_class", "allocated_storage", "iops"),
+    );
+    expect(r.lines.map((l) => l.usageType)).toEqual([
+      "APN1-InstanceUsage:db.m5.large",
+      "APN1-RDS:PIOPS-Storage",
+      "APN1-RDS:PIOPS",
+    ]);
+  });
+
+  it("uses gp2 for an EBS volume without type", () => {
+    const r = usage(
+      "aws_ebs_volume",
+      { size: 10 },
+      TOKYO,
+      { type: true, iops: true, throughput: true },
+      configured("availability_zone", "size"),
+    );
+    expect(r.lines[0]?.usageType).toBe("APN1-EBS:VolumeUsage.gp2");
+  });
+
+  it("prices a standalone ElastiCache cluster whose replication_group_id is not set", () => {
+    const r = usage(
+      "aws_elasticache_cluster",
+      { engine: "memcached", node_type: "cache.t3.micro", num_cache_nodes: 1 },
+      TOKYO,
+      { replication_group_id: true },
+      configured("cluster_id", "engine", "node_type", "num_cache_nodes"),
+    );
+    expect(r.lines).toHaveLength(1);
+  });
+
+  it("prices a minimal replication group as one Redis node", () => {
+    const r = usage(
+      "aws_elasticache_replication_group",
+      { node_type: "cache.t3.micro" },
+      TOKYO,
+      {
+        engine: true,
+        num_cache_clusters: true,
+        num_node_groups: true,
+        replicas_per_node_group: true,
+      },
+      configured("replication_group_id", "description", "node_type"),
+    );
+    expect(rows(r)).toEqual([
+      ["AmazonElastiCache", "APN1-NodeUsage:cache.t3.micro", "CreateCacheCluster:0002", 730],
+    ]);
+  });
+});

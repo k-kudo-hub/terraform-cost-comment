@@ -11,6 +11,12 @@ export interface UsageContext {
    * "aurora" (Standard), "aurora-iopt1" (I/O-Optimized), or undefined when it cannot be read.
    */
   auroraStorageType?: string;
+  /**
+   * Top-level attributes written in the resource's configuration block. An attribute the plan
+   * marks "known after apply" but the configuration leaves out takes its default.
+   * Undefined when the plan has no configuration for the resource.
+   */
+  configured?: ReadonlySet<string>;
 }
 
 interface Env {
@@ -172,8 +178,28 @@ function read<T>(
   return isUnknown(unknown, key) ? "unknown" : get(attrs, key);
 }
 
-const ebsVolume: Estimator = (attrs, unknown, prefix) => {
-  const type = read(str, attrs, unknown, "type");
+/** True when the attribute is left out of the configuration, so its default applies. */
+const notConfigured = (env: Env, key: string): boolean =>
+  env.context.configured !== undefined && !env.context.configured.has(key);
+
+/**
+ * Like `read`, but an attribute that is "known after apply" only because the configuration
+ * leaves it out reads as undefined (not set), so the caller applies its default.
+ */
+function readSet<T>(
+  get: (a: Attributes, k: string) => T | undefined,
+  attrs: Attributes,
+  unknown: Attributes,
+  key: string,
+  env: Env,
+): T | undefined | "unknown" {
+  const v = read(get, attrs, unknown, key);
+  return v === "unknown" && notConfigured(env, key) ? undefined : v;
+}
+
+const ebsVolume: Estimator = (attrs, unknown, prefix, env) => {
+  // Default per the EC2 CreateVolume API reference: gp2.
+  const type = readSet(str, attrs, unknown, "type", env);
   const result = ebsLines(
     {
       label: "volume",
@@ -282,7 +308,7 @@ const RDS_STORAGE: Readonly<Record<string, RdsStorage>> = {
   },
 };
 
-const dbInstance: Estimator = (attrs, unknown, prefix) => {
+const dbInstance: Estimator = (attrs, unknown, prefix, env) => {
   const engine = str(attrs, "engine");
   if (engine === undefined || isUnknown(unknown, "engine")) {
     return unestimable("engine is not known until apply");
@@ -293,20 +319,26 @@ const dbInstance: Estimator = (attrs, unknown, prefix) => {
   if (cls === undefined || isUnknown(unknown, "instance_class")) {
     return unestimable("instance class is not known until apply");
   }
-  if (isUnknown(unknown, "multi_az")) return unestimable("Multi-AZ is not known until apply");
-  const multiAz = attrs.multi_az === true;
+  const multiAzValue = readSet((a, k) => a[k], attrs, unknown, "multi_az", env);
+  if (multiAzValue === "unknown") return unestimable("Multi-AZ is not known until apply");
+  const multiAz = multiAzValue === true;
+  // The RDS API reference states no default for MultiAZ; say so when we assume Single-AZ.
+  const azNote = multiAzValue === undefined ? " Single-AZ (multi_az not set)" : "";
   const lines: UsageLine[] = [
     {
       serviceCode: "AmazonRDS",
       usageType: `${prefix}${multiAz ? "Multi-AZUsage" : "InstanceUsage"}:${cls}`,
       operation,
       amount: HOURS_PER_MONTH,
-      description: `${cls} ${engine}${multiAz ? " Multi-AZ" : ""} (${HOURS_PER_MONTH} h)`,
+      description: `${cls} ${engine}${multiAz ? " Multi-AZ" : azNote} (${HOURS_PER_MONTH} h)`,
     },
   ];
   const partial: string[] = [];
   const excluded: string[] = [];
-  const storageType = read(str, attrs, unknown, "storage_type");
+  // Default per the RDS CreateDBInstance API reference: io1 with Iops, otherwise gp3.
+  const setType = readSet(str, attrs, unknown, "storage_type", env);
+  const storageType =
+    setType !== undefined ? setType : typeof attrs.iops === "number" ? "io1" : "gp3";
   const size = read(num, attrs, unknown, "allocated_storage");
   if (size === undefined || size === "unknown") {
     partial.push("storage size is not known until apply");
@@ -486,12 +518,10 @@ function cacheNodes(
   };
 }
 
-const elasticacheCluster: Estimator = (attrs, unknown, prefix) => {
+const elasticacheCluster: Estimator = (attrs, unknown, prefix, env) => {
   // A member of a replication group is priced with the group.
-  if (
-    str(attrs, "replication_group_id") !== undefined ||
-    isUnknown(unknown, "replication_group_id")
-  ) {
+  const group = readSet(str, attrs, unknown, "replication_group_id", env);
+  if (group !== undefined) {
     return { lines: [], partial: [], excluded: [] };
   }
   if (isUnknown(unknown, "engine")) return unestimable("engine is not known until apply");
@@ -505,11 +535,16 @@ const elasticacheCluster: Estimator = (attrs, unknown, prefix) => {
   );
 };
 
-const elasticacheReplicationGroup: Estimator = (attrs, unknown, prefix) => {
-  if (isUnknown(unknown, "engine")) return unestimable("engine is not known until apply");
-  const shards = read(num, attrs, unknown, "num_node_groups");
-  const replicas = read(num, attrs, unknown, "replicas_per_node_group");
-  const clusters = read(num, attrs, unknown, "num_cache_clusters");
+const elasticacheReplicationGroup: Estimator = (attrs, unknown, prefix, env) => {
+  // Defaults per the provider documentation: engine "redis", num_cache_clusters 1.
+  if (readSet(str, attrs, unknown, "engine", env) === "unknown") {
+    return unestimable("engine is not known until apply");
+  }
+  const shards = readSet(num, attrs, unknown, "num_node_groups", env);
+  const replicas = readSet(num, attrs, unknown, "replicas_per_node_group", env);
+  const setClusters = readSet(num, attrs, unknown, "num_cache_clusters", env);
+  const clusters =
+    setClusters === undefined && shards === undefined && replicas === undefined ? 1 : setClusters;
   let nodes: number | undefined;
   if (typeof shards === "number" && shards > 1) {
     nodes = typeof replicas === "number" ? shards * (replicas + 1) : undefined;

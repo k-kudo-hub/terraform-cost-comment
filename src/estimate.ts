@@ -1,6 +1,6 @@
-import { auroraStorageType, type ConfigModule } from "./plan-config.js";
+import { auroraStorageType, type ConfigModule, configResource } from "./plan-config.js";
 import type { Pricer } from "./pricing.js";
-import { estimateUsage, isAwsType } from "./resources.js";
+import { estimateUsage, isAwsType, type UsageContext } from "./resources.js";
 import type { Attributes, UsageLine } from "./types.js";
 
 /** The parts of `terraform show -json <planfile>` this action reads. */
@@ -108,16 +108,14 @@ export async function estimatePlan(
       otherProviderCount += 1;
       continue;
     }
-    const context =
-      rc.type === "aws_rds_cluster_instance"
-        ? {
-            auroraStorageType: auroraStorageType(
-              rc,
-              plan.resource_changes ?? [],
-              plan.configuration?.root_module,
-            ),
-          }
-        : {};
+    const config = configResource(plan.configuration?.root_module, rc.address);
+    const context: UsageContext = {
+      configured: config === undefined ? undefined : new Set(Object.keys(config.expressions ?? {})),
+      auroraStorageType:
+        rc.type === "aws_rds_cluster_instance"
+          ? auroraStorageType(rc, plan.resource_changes ?? [], plan.configuration?.root_module)
+          : undefined,
+    };
     const sides = {
       before:
         action === "create"

@@ -169,7 +169,7 @@ const JA: Messages = {
   leftOutTitle: "試算に含まれないもの",
   leftOutIntro: "plan からは分からない、使用量で決まる料金:",
   otherProviders: (n) =>
-    `AWS 以外のプロバイダー（random・null など）のリソース ${n} 件は試算していません。`,
+    `AWS 以外のプロバイダー（例: random、null）のリソース ${n} 件は試算していません。`,
   assumptionsIntro: "試算の前提:",
   assumptions: (ctx) => [
     `料金は AWS Pricing Calculator の API（料金の種類 \`${ctx.rateType}\`）による。米ドル・税抜き。`,

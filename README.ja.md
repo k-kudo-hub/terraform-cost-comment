@@ -131,7 +131,7 @@ plan に使うロールには読み取りの権限だけを与え、信頼ポリ
 | `aws-region` | 説明を参照 | リソースを作るリージョン。省略すると、plan の `aws` プロバイダーの設定（定数か変数）、次に環境変数 `AWS_REGION` と `AWS_DEFAULT_REGION`（`configure-aws-credentials` が設定する）から読む |
 | `rate-type` | `BEFORE_DISCOUNTS` | `BEFORE_DISCOUNTS`（公開のオンデマンド料金）・`AFTER_DISCOUNTS`・`AFTER_DISCOUNTS_AND_COMMITMENTS`。後ろの2つは Pricing Calculator の料金の設定で許可されている必要がある |
 | `language` | `en` | コメントの言語。`en` か `ja` |
-| `comment-tag` | （空） | 1つの PR で plan を複数回すとき（`prod` と `staging` など）に、plan ごとにコメントを分ける |
+| `comment-tag` | （空） | 1つの PR で plan を複数回すとき（例: `prod` と `staging`）に、plan ごとにコメントを分ける |
 | `fail-on-unexpected` | `false` | 試算した増加が `cost-expectation` を超えたとき、または想定が書かれていないのに費用が増えたときに、ステップを失敗させる |
 | `github-token` | `${{ github.token }}` | コメントに使うトークン。既定のトークンか GitHub App のトークンを使う。このアクションはボットが投稿したコメントだけを書き換えるため、個人のトークンでは毎回新しいコメントになる |
 
@@ -170,7 +170,7 @@ PR 以外のイベントでは、ジョブのサマリーにだけ書き出し�
 - AWS が料金を返さなかった使用量
 
 使用量で決まる料金（データ転送・LCU・NAT のデータ処理）は plan から読めないため、コメントの注記に名前だけを書きます。
-AWS 以外のプロバイダーのリソース（`random_id`・`null_resource` など）は AWS の費用がかからないため、注記で件数だけを示します。
+AWS 以外のプロバイダーのリソース（例: `random_id`、`null_resource`）は AWS の費用がかからないため、注記で件数だけを示します。
 
 ## Infracost との違い
 

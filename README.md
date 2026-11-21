@@ -127,13 +127,51 @@ The role needs one action in addition to what `terraform plan` needs. The API is
 }
 ```
 
+### Keeping AWS permissions narrow
+
+The action calls one AWS API, `GetUsageLinesEstimatedCost`, with whatever credentials the job has.
+It does not read your account ID or any other account information.
+
+**Use a separate role for pricing.** `terraform plan` needs wide read access to your state and
+resources, while pricing needs only the action above. Switch to a pricing-only role right before this
+action, so the step that talks to the Pricing Calculator API cannot read anything else:
+
+```yaml
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/terraform-plan
+          aws-region: ap-northeast-1
+      - run: |
+          terraform init -input=false
+          terraform plan -input=false -out=tfplan
+          terraform show -json tfplan > plan.json
+      # Drop the plan role and take a role that can only call GetUsageLinesEstimatedCost.
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/terraform-cost-pricing
+          aws-region: ap-northeast-1
+          unset-current-credentials: true
+      - uses: k-kudo-hub/terraform-cost-comment@v0
+        with:
+          plan-json: plan.json
+```
+
+Give `terraform-cost-pricing` only the policy in [IAM permission](#iam-permission), and limit its trust
+policy to pull requests of your repository in the same way as the plan role.
+
+**Think before using `AFTER_DISCOUNTS`.** With `rate-type: AFTER_DISCOUNTS` or
+`AFTER_DISCOUNTS_AND_COMMITMENTS`, the comment shows your account's prices after discounts (with the
+latter, also after Savings Plans and Reserved Instances). Anyone who can read the pull request can then work out the discounts your
+organization has with AWS. Keep the default `BEFORE_DISCOUNTS` (public on-demand prices) unless every
+reader of the repository may see those rates.
+
 ### Inputs
 
 | Name | Default | Description |
 |---|---|---|
 | `plan-json` | (required) | Path to the output of `terraform show -json <planfile>`. |
 | `aws-region` | see description | Region the resources are created in. When omitted: the `aws` provider block in the plan (a constant or a variable), then the `AWS_REGION` and `AWS_DEFAULT_REGION` environment variables, which `configure-aws-credentials` sets. |
-| `rate-type` | `BEFORE_DISCOUNTS` | `BEFORE_DISCOUNTS` (public on-demand prices), `AFTER_DISCOUNTS`, or `AFTER_DISCOUNTS_AND_COMMITMENTS`. The last two must be allowed by your Pricing Calculator rate preferences. |
+| `rate-type` | `BEFORE_DISCOUNTS` | `BEFORE_DISCOUNTS` (public on-demand prices), `AFTER_DISCOUNTS`, or `AFTER_DISCOUNTS_AND_COMMITMENTS`. The last two must be allowed by your Pricing Calculator rate preferences, and put your discounted rates in the comment (see [Keeping AWS permissions narrow](#keeping-aws-permissions-narrow)). |
 | `language` | `en` | Language of the comment: `en` or `ja`. |
 | `comment-tag` | (empty) | Keeps a separate comment per plan when one PR runs several plans, for example `prod` and `staging`. |
 | `fail-on-unexpected` | `false` | Fail the step when the estimated increase exceeds `cost-expectation`, or when cost goes up and no expectation is written. |

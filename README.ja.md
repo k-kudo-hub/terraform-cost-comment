@@ -123,13 +123,48 @@ plan に使うロールには読み取りの権限だけを与え、信頼ポリ
 }
 ```
 
+### AWS の権限を絞る
+
+このアクションが呼ぶ AWS の API は `GetUsageLinesEstimatedCost` の1つだけで、ジョブが持つ認証情報をそのまま使います。
+アカウント ID も、そのほかのアカウントの情報も読みません。
+
+**料金を調べるロールを分ける。** `terraform plan` には state やリソースを読む広い権限が要りますが、料金を調べるには上の1つの権限で足ります。
+このアクションの直前で料金専用のロールに切り替えれば、Pricing Calculator の API を呼ぶステップからは、ほかのものを読めなくなります。
+
+```yaml
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/terraform-plan
+          aws-region: ap-northeast-1
+      - run: |
+          terraform init -input=false
+          terraform plan -input=false -out=tfplan
+          terraform show -json tfplan > plan.json
+      # plan のロールを手放し、GetUsageLinesEstimatedCost だけを呼べるロールに切り替える
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/terraform-cost-pricing
+          aws-region: ap-northeast-1
+          unset-current-credentials: true
+      - uses: k-kudo-hub/terraform-cost-comment@v0
+        with:
+          plan-json: plan.json
+          language: ja
+```
+
+`terraform-cost-pricing` には [IAM の権限](#iam-の権限) のポリシーだけを付け、信頼ポリシーは plan のロールと同じようにこのリポジトリの PR に絞ってください。
+
+**`AFTER_DISCOUNTS` を使う前に考える。** `rate-type` を `AFTER_DISCOUNTS` か `AFTER_DISCOUNTS_AND_COMMITMENTS` にすると、コメントには割引を反映した自社の単価が載ります（後者は Savings Plans とリザーブドインスタンスも反映）。
+すると、PR を読める人なら誰でも、自社が AWS と結んでいる割引を推し量れるようになります。
+リポジトリを読める人全員にその単価を見せてよい場合を除き、既定の `BEFORE_DISCOUNTS`（公開のオンデマンド料金）のままにしてください。
+
 ### 入力
 
 | 名前 | 既定値 | 説明 |
 |---|---|---|
 | `plan-json` | （必須） | `terraform show -json <planfile>` の出力のパス |
 | `aws-region` | 説明を参照 | リソースを作るリージョン。省略すると、plan の `aws` プロバイダーの設定（定数か変数）、次に環境変数 `AWS_REGION` と `AWS_DEFAULT_REGION`（`configure-aws-credentials` が設定する）から読む |
-| `rate-type` | `BEFORE_DISCOUNTS` | `BEFORE_DISCOUNTS`（公開のオンデマンド料金）・`AFTER_DISCOUNTS`・`AFTER_DISCOUNTS_AND_COMMITMENTS`。後ろの2つは Pricing Calculator の料金の設定で許可されている必要がある |
+| `rate-type` | `BEFORE_DISCOUNTS` | `BEFORE_DISCOUNTS`（公開のオンデマンド料金）・`AFTER_DISCOUNTS`・`AFTER_DISCOUNTS_AND_COMMITMENTS`。後ろの2つは Pricing Calculator の料金の設定で許可されている必要があり、割引後の自社の単価がコメントに載る（[AWS の権限を絞る](#aws-の権限を絞る)） |
 | `language` | `en` | コメントの言語。`en` か `ja` |
 | `comment-tag` | （空） | 1つの PR で plan を複数回すとき（例: `prod` と `staging`）に、plan ごとにコメントを分ける |
 | `fail-on-unexpected` | `false` | 試算した増加が `cost-expectation` を超えたとき、または想定が書かれていないのに費用が増えたときに、ステップを失敗させる |

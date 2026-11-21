@@ -111,8 +111,14 @@ The figure is USD per month. Use a negative figure (`cost-expectation: -20`) whe
 
 Pull requests from forks get a read-only token and no OIDC token, so the workflow above works for pull
 requests from branches of the same repository. Give the plan role read-only permissions, and limit its
-trust policy to pull requests of your repository (`token.actions.githubusercontent.com:sub` =
-`repo:OWNER/REPO:pull_request`).
+trust policy to pull requests of your repository: set `token.actions.githubusercontent.com:sub` to the
+repository's subject prefix followed by `:pull_request`. Repositories created after July 15, 2026 use
+immutable subjects that include numeric IDs (`repo:OWNER@OWNER_ID/REPO@REPO_ID:pull_request`); older ones
+use `repo:OWNER/REPO:pull_request` unless they opted in. Check yours with:
+
+```sh
+gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix
+```
 
 ### IAM permission
 

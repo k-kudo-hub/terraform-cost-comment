@@ -109,7 +109,12 @@ cost-expectation: +50
 単位は米ドル／月です。費用を下げる PR なら負の数（`cost-expectation: -20`）を書きます。
 
 フォークからの PR には読み取り専用のトークンしか渡らず、OIDC のトークンも渡らないため、上のワークフローが動くのは同じリポジトリのブランチからの PR です。
-plan に使うロールには読み取りの権限だけを与え、信頼ポリシーをこのリポジトリの PR に絞ってください（`token.actions.githubusercontent.com:sub` を `repo:OWNER/REPO:pull_request` にする）。
+plan に使うロールには読み取りの権限だけを与え、信頼ポリシーをこのリポジトリの PR に絞ってください。`token.actions.githubusercontent.com:sub` には、リポジトリの subject の接頭辞に `:pull_request` を続けた値を指定します。
+2026年7月15日より後に作ったリポジトリは数値 ID を含む形式（`repo:OWNER@OWNER_ID/REPO@REPO_ID:pull_request`）で、それより前のリポジトリは切り替えていなければ `repo:OWNER/REPO:pull_request` です。自分のリポジトリの接頭辞は次で確かめられます。
+
+```sh
+gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix
+```
 
 ### IAM の権限
 

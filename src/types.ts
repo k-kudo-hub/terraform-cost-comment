@@ -12,8 +12,16 @@ export interface UsageLine {
 /** Result of turning one resource's attributes into usage lines. */
 export interface UsageResult {
   lines: UsageLine[];
-  /** Parts of the resource that were not estimated, e.g. "data processing (per GB)". */
+  /**
+   * Usage-based charges the plan cannot tell, e.g. "data processing (per GB)".
+   * Same for every resource of the type, so they are shown once as a footnote.
+   */
   excluded: string[];
+  /**
+   * Parts of this resource that would cost money but could not be priced, e.g. a root volume
+   * whose size is known only after apply. Shown next to the resource as "not estimated".
+   */
+  partial: string[];
   /** Set when the resource could not be estimated at all. */
   unestimable?: string;
 }

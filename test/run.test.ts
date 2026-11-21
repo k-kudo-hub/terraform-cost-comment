@@ -24,6 +24,7 @@ const deps = (over: Partial<RunDeps> = {}) => {
   const base: RunDeps = {
     input: (name) =>
       ({ "plan-json": "plan.json", "rate-type": "BEFORE_DISCOUNTS", language: "en" })[name] ?? "",
+    env: () => undefined,
     readFile: async () => JSON.stringify(plan),
     createPricer: () => async (lines) => ({ prices: lines.map((line) => ({ line, cost: 32.85 })) }),
     pullRequest: { body: "Adds a NAT gateway.\n\ncost-expectation: +10" },
@@ -84,6 +85,15 @@ describe("run", () => {
     expect(t.outputs.region).toBe("ap-northeast-1");
   });
 
+  it("falls back to AWS_REGION when the plan does not name the region", async () => {
+    const t = deps({
+      readFile: async () => JSON.stringify({ resource_changes: [] }),
+      env: (name) => (name === "AWS_REGION" ? "eu-west-1" : undefined),
+    });
+    await run(t.deps);
+    expect(t.outputs.region).toBe("eu-west-1");
+  });
+
   it("fails with a clear message when the region cannot be found", async () => {
     const t = deps({ readFile: async () => JSON.stringify({ resource_changes: [] }) });
     await run(t.deps);
@@ -119,8 +129,8 @@ describe("upsertComment", () => {
   it("updates the comment that carries the marker", async () => {
     const api = {
       listComments: vi.fn(async () => [
-        { id: 1, body: "unrelated" },
-        { id: 2, body: "<!-- terraform-cost-comment -->\nold" },
+        { id: 1, body: "unrelated", user: { type: "Bot" } },
+        { id: 2, body: "<!-- terraform-cost-comment -->\nold", user: { type: "Bot" } },
       ]),
       createComment: vi.fn(),
       updateComment: vi.fn(),
@@ -133,6 +143,19 @@ describe("upsertComment", () => {
       body: "new",
     });
     expect(api.createComment).not.toHaveBeenCalled();
+  });
+
+  it("leaves a person's comment that starts with the marker alone", async () => {
+    const api = {
+      listComments: vi.fn(async () => [
+        { id: 3, body: "<!-- terraform-cost-comment -->\nquoted", user: { type: "User" } },
+      ]),
+      createComment: vi.fn(),
+      updateComment: vi.fn(),
+    };
+    await upsertComment(api, issue, "<!-- terraform-cost-comment -->", "new");
+    expect(api.updateComment).not.toHaveBeenCalled();
+    expect(api.createComment).toHaveBeenCalledOnce();
   });
 
   it("creates a comment when none carries the marker", async () => {

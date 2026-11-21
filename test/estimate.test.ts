@@ -2,13 +2,14 @@ import { describe, expect, it } from "vitest";
 import { detectRegion, estimatePlan, type TerraformPlan } from "../src/estimate.js";
 import type { Pricer } from "../src/pricing.js";
 
-/** Fake pricer: an instance hour costs 0.01, anything else 1 per unit, "bad" usage types fail. */
+/** Fake hourly prices by instance type; anything else costs 1 per unit; "bad" usage types fail. */
+const HOURLY: Record<string, number> = { "t3.micro": 0.01, "t3.large": 0.08 };
 const pricer: Pricer = async (lines) => ({
-  prices: lines.map((line) =>
-    line.usageType.includes("bad")
-      ? { line, error: "BAD_REQUEST: No matching usage" }
-      : { line, cost: line.usageType.includes("BoxUsage") ? line.amount * 0.01 : line.amount },
-  ),
+  prices: lines.map((line) => {
+    if (line.usageType.includes("bad")) return { line, error: "BAD_REQUEST: No matching usage" };
+    const type = line.usageType.split("BoxUsage:")[1];
+    return { line, cost: type === undefined ? line.amount : line.amount * (HOURLY[type] ?? 0) };
+  }),
 });
 
 const change = (
@@ -82,8 +83,8 @@ describe("estimatePlan", () => {
       pricer,
     );
     expect(r.resources.map((x) => [x.address, x.action, x.delta])).toEqual([
+      ["aws_instance.b", "replace", 51.1],
       ["aws_ebs_volume.a", "update", 30],
-      ["aws_instance.b", "replace", 0],
     ]);
   });
 
@@ -162,6 +163,48 @@ describe("estimatePlan", () => {
     expect(r.resources).toEqual([]);
     expect(r.notEstimated[0]?.reason).toContain("BAD_REQUEST");
     expect(r.totalDelta).toBe(0);
+  });
+
+  it("keeps unpriced parts from both sides of an update", async () => {
+    const r = await estimatePlan(
+      plan(
+        change(
+          "aws_db_instance.db",
+          "aws_db_instance",
+          ["update"],
+          {
+            engine: "mysql",
+            instance_class: "db.t3.micro",
+            allocated_storage: 100,
+            storage_type: "io1",
+          },
+          {
+            engine: "mysql",
+            instance_class: "db.t3.micro",
+            allocated_storage: 100,
+            storage_type: "gp3",
+          },
+        ),
+      ),
+      "us-east-1",
+      pricer,
+    );
+    expect(r.resources[0]?.partial).toEqual([
+      "before the change: io1 storage and its provisioned IOPS are not supported",
+    ]);
+  });
+
+  it("counts resources of other providers without listing them as not estimated", async () => {
+    const r = await estimatePlan(
+      plan(
+        change("random_id.suffix", "random_id", ["create"], null, {}),
+        change("null_resource.x", "null_resource", ["create"], null, {}),
+      ),
+      "us-east-1",
+      pricer,
+    );
+    expect(r.notEstimated).toEqual([]);
+    expect(r.otherProviderCount).toBe(2);
   });
 
   it("keeps the parts left out of an estimated resource", async () => {

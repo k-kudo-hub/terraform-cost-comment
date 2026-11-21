@@ -10,6 +10,7 @@ const pullRequest = github.context.payload.pull_request as
 
 await run({
   input: (name) => core.getInput(name),
+  env: (name) => process.env[name],
   readFile: (path) => readFile(path, "utf8"),
   createPricer: (rateType) => createAwsPricer(rateType),
   pullRequest,

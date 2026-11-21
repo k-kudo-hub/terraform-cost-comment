@@ -55894,6 +55894,7 @@ var blockUnknown = (unknown, key, index) => {
 var unestimable = (reason) => ({
   lines: [],
   excluded: [],
+  partial: [],
   unestimable: reason
 });
 var EBS_TYPES = {
@@ -55912,11 +55913,18 @@ var IO2_TIERS = [
   { suffix: ".tier2", size: 32e3 },
   { suffix: ".tier3", size: Number.POSITIVE_INFINITY }
 ];
-function ebsLines(label, type, size, iops, throughput, prefix) {
-  if (size === void 0) return `${label} size is not known until apply`;
-  if (type === void 0) return `${label} type is not known until apply`;
+function ebsLines(spec, prefix) {
+  const { label, type, size, iops, throughput } = spec;
+  if (size === void 0 || size === "unknown") {
+    return { lines: [], partial: [], unestimable: `${label} size is not known until apply` };
+  }
+  if (type === void 0 || type === "unknown") {
+    return { lines: [], partial: [], unestimable: `${label} type is not known until apply` };
+  }
   const t = EBS_TYPES[type];
-  if (t === void 0) return `${label} type "${type}" is not supported`;
+  if (t === void 0) {
+    return { lines: [], partial: [], unestimable: `${label} type "${type}" is not supported` };
+  }
   const line = (usageType, amount, description) => ({
     serviceCode: "AmazonEC2",
     usageType: prefix + usageType,
@@ -55925,23 +55933,31 @@ function ebsLines(label, type, size, iops, throughput, prefix) {
     description
   });
   const lines = [line(t.storage, size, `${label} ${type} ${size} GB`)];
+  const partial = [];
+  if ((type === "io1" || type === "io2") && iops === "unknown") {
+    partial.push(`${label} IOPS is not known until apply`);
+  }
+  const knownIops = typeof iops === "number" ? iops : void 0;
+  const knownThroughput = typeof throughput === "number" ? throughput : void 0;
   if (type === "gp3") {
-    if (iops !== void 0 && iops > GP3_FREE_IOPS) {
-      lines.push(line("EBS:VolumeP-IOPS.gp3", iops - GP3_FREE_IOPS, `${label} IOPS above 3,000`));
+    if (knownIops !== void 0 && knownIops > GP3_FREE_IOPS) {
+      lines.push(
+        line("EBS:VolumeP-IOPS.gp3", knownIops - GP3_FREE_IOPS, `${label} IOPS above 3,000`)
+      );
     }
-    if (throughput !== void 0 && throughput > GP3_FREE_THROUGHPUT_MIBPS) {
+    if (knownThroughput !== void 0 && knownThroughput > GP3_FREE_THROUGHPUT_MIBPS) {
       lines.push(
         line(
           "EBS:VolumeP-Throughput.gp3",
-          (throughput - GP3_FREE_THROUGHPUT_MIBPS) / 1024,
+          (knownThroughput - GP3_FREE_THROUGHPUT_MIBPS) / 1024,
           `${label} throughput above 125 MiB/s`
         )
       );
     }
-  } else if (type === "io1" && iops !== void 0 && iops > 0) {
-    lines.push(line("EBS:VolumeP-IOPS.piops", iops, `${label} ${iops} provisioned IOPS`));
-  } else if (type === "io2" && iops !== void 0 && iops > 0) {
-    let rest = iops;
+  } else if (type === "io1" && knownIops !== void 0 && knownIops > 0) {
+    lines.push(line("EBS:VolumeP-IOPS.piops", knownIops, `${label} ${knownIops} provisioned IOPS`));
+  } else if (type === "io2" && knownIops !== void 0 && knownIops > 0) {
+    let rest = knownIops;
     for (const tier of IO2_TIERS) {
       if (rest <= 0) break;
       const amount = Math.min(rest, tier.size);
@@ -55955,20 +55971,25 @@ function ebsLines(label, type, size, iops, throughput, prefix) {
       rest -= amount;
     }
   }
-  return lines;
+  return { lines, partial };
+}
+function read(get2, attrs, unknown, key) {
+  return isUnknown(unknown, key) ? "unknown" : get2(attrs, key);
 }
 var ebsVolume = (attrs, unknown, prefix) => {
-  if (isUnknown(unknown, "size")) return unestimable("volume size is not known until apply");
-  const lines = ebsLines(
-    "volume",
-    str(attrs, "type") ?? (isUnknown(unknown, "type") ? void 0 : "gp2"),
-    num(attrs, "size"),
-    num(attrs, "iops"),
-    num(attrs, "throughput"),
+  const type = read(str, attrs, unknown, "type");
+  const result = ebsLines(
+    {
+      label: "volume",
+      type: type ?? "gp2",
+      size: read(num, attrs, unknown, "size"),
+      iops: read(num, attrs, unknown, "iops"),
+      throughput: read(num, attrs, unknown, "throughput")
+    },
     prefix
   );
-  if (typeof lines === "string") return unestimable(lines);
-  return { lines, excluded: ["EBS snapshots"] };
+  if (result.unestimable !== void 0) return unestimable(result.unestimable);
+  return { lines: result.lines, partial: result.partial, excluded: ["EBS snapshots"] };
 };
 var instance = (attrs, unknown, prefix) => {
   const type = str(attrs, "instance_type");
@@ -55988,28 +56009,39 @@ var instance = (attrs, unknown, prefix) => {
       description: `${type} Linux on-demand (${HOURS_PER_MONTH} h)`
     }
   ];
-  const excluded = [];
+  const partial = [];
   const volumes = [
     ["root_block_device", "root volume"],
     ["ebs_block_device", "EBS volume"]
   ];
   for (const [key, label] of volumes) {
+    if (isUnknown(unknown, key)) {
+      if (key === "root_block_device")
+        partial.push("root volume size (from the AMI) is not known until apply");
+      continue;
+    }
     blocks(attrs, key).forEach((block, i5) => {
       const u = blockUnknown(unknown, key, i5);
       const result = ebsLines(
-        label,
-        u.volume_type === true ? void 0 : str(block, "volume_type"),
-        u.volume_size === true ? void 0 : num(block, "volume_size"),
-        num(block, "iops"),
-        num(block, "throughput"),
+        {
+          label,
+          type: read(str, block, u, "volume_type"),
+          size: read(num, block, u, "volume_size"),
+          iops: read(num, block, u, "iops"),
+          throughput: read(num, block, u, "throughput")
+        },
         prefix
       );
-      if (typeof result === "string") excluded.push(result);
-      else lines.push(...result);
+      lines.push(...result.lines);
+      partial.push(...result.partial);
+      if (result.unestimable !== void 0) partial.push(result.unestimable);
     });
   }
-  excluded.push("EC2 operating system licenses other than Linux", "data transfer");
-  return { lines, excluded };
+  return {
+    lines,
+    partial,
+    excluded: ["EC2 operating system licenses other than Linux", "data transfer"]
+  };
 };
 var RDS_ENGINES = {
   mysql: "CreateDBInstance:0002",
@@ -56023,13 +56055,16 @@ var RDS_STORAGE = {
 };
 var dbInstance = (attrs, unknown, prefix) => {
   const engine = str(attrs, "engine");
-  if (engine === void 0) return unestimable("engine is not known until apply");
+  if (engine === void 0 || isUnknown(unknown, "engine")) {
+    return unestimable("engine is not known until apply");
+  }
   const operation2 = RDS_ENGINES[engine];
   if (operation2 === void 0) return unestimable(`engine "${engine}" is not supported`);
   const cls = str(attrs, "instance_class");
   if (cls === void 0 || isUnknown(unknown, "instance_class")) {
     return unestimable("instance class is not known until apply");
   }
+  if (isUnknown(unknown, "multi_az")) return unestimable("Multi-AZ is not known until apply");
   const multiAz = attrs.multi_az === true;
   const lines = [
     {
@@ -56040,28 +56075,35 @@ var dbInstance = (attrs, unknown, prefix) => {
       description: `${cls} ${engine}${multiAz ? " Multi-AZ" : ""} (${HOURS_PER_MONTH} h)`
     }
   ];
+  const partial = [];
   const excluded = [];
-  const storageType = isUnknown(unknown, "storage_type") ? void 0 : str(attrs, "storage_type");
-  const size = isUnknown(unknown, "allocated_storage") ? void 0 : num(attrs, "allocated_storage");
-  const storage = storageType === void 0 ? void 0 : RDS_STORAGE[storageType];
-  if (size === void 0) {
-    excluded.push("RDS storage (size is not known until apply)");
-  } else if (storageType === void 0) {
-    excluded.push("RDS storage (type is not known until apply)");
-  } else if (storage === void 0) {
-    excluded.push(`RDS ${storageType} storage and provisioned IOPS`);
+  const storageType = read(str, attrs, unknown, "storage_type");
+  const size = read(num, attrs, unknown, "allocated_storage");
+  if (size === void 0 || size === "unknown") {
+    partial.push("storage size is not known until apply");
+  } else if (storageType === void 0 || storageType === "unknown") {
+    partial.push("storage type is not known until apply");
   } else {
-    lines.push({
-      serviceCode: "AmazonRDS",
-      usageType: prefix + (multiAz ? storage.multi : storage.single),
-      operation: operation2,
-      amount: size,
-      description: `${storageType} storage ${size} GB`
-    });
+    const storage = RDS_STORAGE[storageType];
+    if (storage === void 0) {
+      partial.push(`${storageType} storage and its provisioned IOPS are not supported`);
+    } else {
+      lines.push({
+        serviceCode: "AmazonRDS",
+        usageType: prefix + (multiAz ? storage.multi : storage.single),
+        operation: operation2,
+        amount: size,
+        description: `${storageType} storage ${size} GB`
+      });
+      const iops = num(attrs, "iops");
+      const throughput = num(attrs, "storage_throughput");
+      if (storageType === "gp3" && ((iops ?? 0) > 3e3 || (throughput ?? 0) > 125)) {
+        partial.push("gp3 IOPS and throughput above the baseline are not supported");
+      }
+    }
   }
-  if (storageType === "gp3") excluded.push("RDS gp3 IOPS and throughput above the baseline");
   excluded.push("RDS backup storage beyond the free allowance", "data transfer");
-  return { lines, excluded };
+  return { lines, partial, excluded };
 };
 var natGateway = (_attrs, _unknown, prefix) => ({
   lines: [
@@ -56073,6 +56115,7 @@ var natGateway = (_attrs, _unknown, prefix) => ({
       description: `NAT gateway (${HOURS_PER_MONTH} h)`
     }
   ],
+  partial: [],
   excluded: ["NAT gateway data processing (per GB)"]
 });
 var LB_OPERATIONS = {
@@ -56080,7 +56123,10 @@ var LB_OPERATIONS = {
   network: "LoadBalancing:Network",
   gateway: "LoadBalancing:Gateway"
 };
-var loadBalancer = (attrs, _unknown, prefix) => {
+var loadBalancer = (attrs, unknown, prefix) => {
+  if (isUnknown(unknown, "load_balancer_type")) {
+    return unestimable("load balancer type is not known until apply");
+  }
   const type = str(attrs, "load_balancer_type") ?? "application";
   const operation2 = LB_OPERATIONS[type];
   if (operation2 === void 0) return unestimable(`load balancer type "${type}" is not supported`);
@@ -56094,6 +56140,7 @@ var loadBalancer = (attrs, _unknown, prefix) => {
         description: `${type} load balancer (${HOURS_PER_MONTH} h)`
       }
     ],
+    partial: [],
     excluded: ["load balancer capacity units (LCU, depend on traffic)"]
   };
 };
@@ -56105,6 +56152,9 @@ var ESTIMATORS = {
   aws_lb: loadBalancer,
   aws_alb: loadBalancer
 };
+function isAwsType(type) {
+  return /^aws(cc)?_/.test(type);
+}
 function estimateUsage(type, attrs, unknown, region) {
   const estimator = ESTIMATORS[type];
   if (estimator === void 0) return unestimable(`resource type ${type} is not supported`);
@@ -56118,44 +56168,59 @@ function parseExpectation(body) {
   const value = Number(m3[2]);
   return m3[1] === "-" ? -value : value;
 }
+var cents = (n3) => Math.round(n3 * 100) / 100;
 function judge(delta, expected) {
-  if (expected === void 0) return delta > 0 ? { kind: "undeclared" } : { kind: "no-increase" };
-  if (delta > expected) {
-    return { kind: "exceeded", expected, over: Math.round((delta - expected) * 100) / 100 };
-  }
+  const d5 = cents(delta);
+  if (expected === void 0) return d5 > 0 ? { kind: "undeclared" } : { kind: "no-increase" };
+  if (d5 > expected) return { kind: "exceeded", expected, over: cents(d5 - expected) };
   return { kind: "within", expected };
 }
 function isUnexpected(verdict) {
   return verdict.kind === "exceeded" || verdict.kind === "undeclared";
 }
+function gaps(estimate) {
+  return [
+    ...estimate.notEstimated.map(({ address, action, reason }) => ({ address, action, reason })),
+    ...estimate.resources.flatMap(
+      (r5) => r5.partial.map((reason) => ({ address: r5.address, action: r5.action, reason }))
+    )
+  ];
+}
 var money = (n3) => `$${Math.abs(n3).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-var signed = (n3) => `${n3 > 0 ? "+" : n3 < 0 ? "-" : "\xB1"}${money(n3)}`;
+var signed = (n3) => {
+  const c5 = cents(n3);
+  return `${c5 > 0 ? "+" : c5 < 0 ? "-" : "\xB1"}${money(c5)}`;
+};
 var cell = (s2) => s2.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 var EN = {
   headline: (d5) => `### \u{1F4B0} Monthly cost change: **${d5}** /mo`,
-  verdict: (v) => {
+  verdict: (v, delta, hasGaps) => {
+    const partly = hasGaps ? " for the estimated resources" : "";
     switch (v.kind) {
       case "exceeded":
-        return `> [!WARNING]
-> This is **${money(v.over)}/mo more** than the expected change (${signed(v.expected)}/mo). Check that the increase is intended before merging.`;
+        return delta > 0 ? `> [!WARNING]
+> This is **${money(v.over)}/mo more** than the expected change (${signed(v.expected)}/mo)${partly}. Check that the increase is intended before merging.` : `> [!WARNING]
+> The cost goes down **${money(v.over)}/mo less** than expected (${signed(v.expected)}/mo)${partly}. Check the plan before merging.`;
       case "within":
-        return `> \u2705 Within the expected change (${signed(v.expected)}/mo).`;
+        return hasGaps ? `> Within the expected change (${signed(v.expected)}/mo)${partly}. See below for what is not estimated.` : `> \u2705 Within the expected change (${signed(v.expected)}/mo).`;
       case "undeclared":
         return "> [!IMPORTANT]\n> No expected change is declared for this PR. Is this increase what you expected?";
       case "no-increase":
-        return "> \u2705 This plan does not increase the monthly cost.";
+        return hasGaps ? `> The estimated resources do not increase the monthly cost. See below for what is not estimated.` : "> \u2705 This plan does not increase the monthly cost.";
     }
   },
-  notEstimatedWarning: (n3) => `> \u26A0\uFE0F ${n3} changed resource${n3 === 1 ? " is" : "s are"} not included in this total. The real change can be larger.`,
+  gapWarning: (n3) => `> [!CAUTION]
+> ${n3} change${n3 === 1 ? " is" : "s are"} not included in this total. The real change can be larger.`,
   summary: { monthly: "Monthly", before: "Before", after: "After", expected: "Expected change" },
   byResource: "#### Changes by resource (largest increase first)",
   columns: ["Resource", "Action", "Before", "After", "Change"],
   actions: { create: "create", delete: "delete", update: "update", replace: "replace" },
   pricedUsage: "Priced usage",
-  notEstimatedTitle: (n3) => `#### \u26A0\uFE0F Not estimated (${n3})`,
-  notEstimatedColumns: ["Resource", "Action", "Why"],
+  gapTitle: (n3) => `#### \u26A0\uFE0F Not estimated (${n3})`,
+  gapColumns: ["Resource", "Action", "What is missing"],
   leftOutTitle: "What the estimate leaves out",
-  leftOutIntro: "Not included in the estimate:",
+  leftOutIntro: "Usage-based charges the plan cannot tell:",
+  otherProviders: (n3) => `${n3} changed resource${n3 === 1 ? "" : "s"} of non-AWS providers (such as random or null), not priced.`,
   assumptionsIntro: "Assumptions:",
   assumptions: (ctx) => [
     `Prices from the AWS Pricing Calculator API (rate type \`${ctx.rateType}\`), USD, before tax.`,
@@ -56166,29 +56231,33 @@ var EN = {
 };
 var JA = {
   headline: (d5) => `### \u{1F4B0} \u6708\u984D\u8CBB\u7528\u306E\u5909\u5316: **${d5}** /\u6708`,
-  verdict: (v) => {
+  verdict: (v, delta, hasGaps) => {
+    const partly = hasGaps ? "\uFF08\u8A66\u7B97\u3067\u304D\u305F\u30EA\u30BD\u30FC\u30B9\u306B\u3064\u3044\u3066\uFF09" : "";
     switch (v.kind) {
       case "exceeded":
-        return `> [!WARNING]
-> \u60F3\u5B9A\u3057\u305F\u5909\u5316\uFF08${signed(v.expected)}/\u6708\uFF09\u3088\u308A **${money(v.over)}/\u6708 \u591A\u304F** \u306A\u308A\u307E\u3059\u3002\u30DE\u30FC\u30B8\u306E\u524D\u306B\u3001\u3053\u306E\u5897\u52A0\u304C\u610F\u56F3\u3057\u305F\u3082\u306E\u304B\u3092\u78BA\u304B\u3081\u3066\u304F\u3060\u3055\u3044\u3002`;
+        return delta > 0 ? `> [!WARNING]
+> \u60F3\u5B9A\u3057\u305F\u5909\u5316\uFF08${signed(v.expected)}/\u6708\uFF09\u3088\u308A **${money(v.over)}/\u6708 \u591A\u304F** \u306A\u308A\u307E\u3059${partly}\u3002\u30DE\u30FC\u30B8\u306E\u524D\u306B\u3001\u3053\u306E\u5897\u52A0\u304C\u610F\u56F3\u3057\u305F\u3082\u306E\u304B\u3092\u78BA\u304B\u3081\u3066\u304F\u3060\u3055\u3044\u3002` : `> [!WARNING]
+> \u60F3\u5B9A\u3057\u305F\u5909\u5316\uFF08${signed(v.expected)}/\u6708\uFF09\u307B\u3069\u4E0B\u304C\u3089\u305A\u3001**${money(v.over)}/\u6708 \u5C11\u306A\u304F** \u3057\u304B\u4E0B\u304C\u308A\u307E\u305B\u3093${partly}\u3002\u30DE\u30FC\u30B8\u306E\u524D\u306B plan \u3092\u78BA\u304B\u3081\u3066\u304F\u3060\u3055\u3044\u3002`;
       case "within":
-        return `> \u2705 \u60F3\u5B9A\u3057\u305F\u5909\u5316\uFF08${signed(v.expected)}/\u6708\uFF09\u306E\u7BC4\u56F2\u306B\u53CE\u307E\u3063\u3066\u3044\u307E\u3059\u3002`;
+        return hasGaps ? `> \u60F3\u5B9A\u3057\u305F\u5909\u5316\uFF08${signed(v.expected)}/\u6708\uFF09\u306E\u7BC4\u56F2\u306B\u53CE\u307E\u3063\u3066\u3044\u307E\u3059${partly}\u3002\u8A66\u7B97\u3067\u304D\u306A\u304B\u3063\u305F\u3082\u306E\u306F\u4E0B\u306B\u3042\u308A\u307E\u3059\u3002` : `> \u2705 \u60F3\u5B9A\u3057\u305F\u5909\u5316\uFF08${signed(v.expected)}/\u6708\uFF09\u306E\u7BC4\u56F2\u306B\u53CE\u307E\u3063\u3066\u3044\u307E\u3059\u3002`;
       case "undeclared":
         return "> [!IMPORTANT]\n> \u3053\u306E PR \u306B\u306F\u60F3\u5B9A\u3059\u308B\u8CBB\u7528\u306E\u5909\u5316\u304C\u66F8\u304B\u308C\u3066\u3044\u307E\u305B\u3093\u3002\u3053\u306E\u5897\u52A0\u306F\u60F3\u5B9A\u3069\u304A\u308A\u3067\u3059\u304B\uFF1F";
       case "no-increase":
-        return "> \u2705 \u3053\u306E plan \u3067\u6708\u984D\u8CBB\u7528\u306F\u5897\u3048\u307E\u305B\u3093\u3002";
+        return hasGaps ? "> \u8A66\u7B97\u3067\u304D\u305F\u30EA\u30BD\u30FC\u30B9\u3067\u306F\u6708\u984D\u8CBB\u7528\u306F\u5897\u3048\u307E\u305B\u3093\u3002\u8A66\u7B97\u3067\u304D\u306A\u304B\u3063\u305F\u3082\u306E\u306F\u4E0B\u306B\u3042\u308A\u307E\u3059\u3002" : "> \u2705 \u3053\u306E plan \u3067\u6708\u984D\u8CBB\u7528\u306F\u5897\u3048\u307E\u305B\u3093\u3002";
     }
   },
-  notEstimatedWarning: (n3) => `> \u26A0\uFE0F \u5909\u66F4\u3055\u308C\u308B\u30EA\u30BD\u30FC\u30B9\u306E\u3046\u3061 ${n3} \u4EF6\u306F\u3001\u3053\u306E\u5408\u8A08\u306B\u542B\u307E\u308C\u3066\u3044\u307E\u305B\u3093\u3002\u5B9F\u969B\u306E\u5909\u5316\u306F\u3053\u308C\u3088\u308A\u5927\u304D\u304F\u306A\u308B\u3053\u3068\u304C\u3042\u308A\u307E\u3059\u3002`,
+  gapWarning: (n3) => `> [!CAUTION]
+> ${n3} \u4EF6\u306E\u5909\u66F4\u304C\u3053\u306E\u5408\u8A08\u306B\u542B\u307E\u308C\u3066\u3044\u307E\u305B\u3093\u3002\u5B9F\u969B\u306E\u5909\u5316\u306F\u3053\u308C\u3088\u308A\u5927\u304D\u304F\u306A\u308B\u3053\u3068\u304C\u3042\u308A\u307E\u3059\u3002`,
   summary: { monthly: "\u6708\u984D", before: "\u5909\u66F4\u524D", after: "\u5909\u66F4\u5F8C", expected: "\u60F3\u5B9A\u3057\u305F\u5909\u5316" },
   byResource: "#### \u30EA\u30BD\u30FC\u30B9\u3054\u3068\u306E\u5909\u5316\uFF08\u5897\u52A0\u306E\u5927\u304D\u3044\u9806\uFF09",
   columns: ["\u30EA\u30BD\u30FC\u30B9", "\u64CD\u4F5C", "\u5909\u66F4\u524D", "\u5909\u66F4\u5F8C", "\u5909\u5316"],
   actions: { create: "\u4F5C\u6210", delete: "\u524A\u9664", update: "\u66F4\u65B0", replace: "\u7F6E\u304D\u63DB\u3048" },
   pricedUsage: "\u8A66\u7B97\u3057\u305F\u4F7F\u7528\u91CF",
-  notEstimatedTitle: (n3) => `#### \u26A0\uFE0F \u8A66\u7B97\u3067\u304D\u306A\u304B\u3063\u305F\u30EA\u30BD\u30FC\u30B9\uFF08${n3} \u4EF6\uFF09`,
-  notEstimatedColumns: ["\u30EA\u30BD\u30FC\u30B9", "\u64CD\u4F5C", "\u7406\u7531"],
+  gapTitle: (n3) => `#### \u26A0\uFE0F \u8A66\u7B97\u3067\u304D\u306A\u304B\u3063\u305F\u3082\u306E\uFF08${n3} \u4EF6\uFF09`,
+  gapColumns: ["\u30EA\u30BD\u30FC\u30B9", "\u64CD\u4F5C", "\u8A66\u7B97\u3067\u304D\u306A\u304B\u3063\u305F\u3082\u306E"],
   leftOutTitle: "\u8A66\u7B97\u306B\u542B\u307E\u308C\u306A\u3044\u3082\u306E",
-  leftOutIntro: "\u8A66\u7B97\u306B\u542B\u3081\u3066\u3044\u306A\u3044\u3082\u306E:",
+  leftOutIntro: "plan \u304B\u3089\u306F\u5206\u304B\u3089\u306A\u3044\u3001\u4F7F\u7528\u91CF\u3067\u6C7A\u307E\u308B\u6599\u91D1:",
+  otherProviders: (n3) => `AWS \u4EE5\u5916\u306E\u30D7\u30ED\u30D0\u30A4\u30C0\u30FC\uFF08random\u30FBnull \u306A\u3069\uFF09\u306E\u30EA\u30BD\u30FC\u30B9 ${n3} \u4EF6\u306F\u8A66\u7B97\u3057\u3066\u3044\u307E\u305B\u3093\u3002`,
   assumptionsIntro: "\u8A66\u7B97\u306E\u524D\u63D0:",
   assumptions: (ctx) => [
     `\u6599\u91D1\u306F AWS Pricing Calculator \u306E API\uFF08\u6599\u91D1\u306E\u7A2E\u985E \`${ctx.rateType}\`\uFF09\u306B\u3088\u308B\u3002\u7C73\u30C9\u30EB\u30FB\u7A0E\u629C\u304D\u3002`,
@@ -56203,15 +56272,15 @@ function marker(tag) {
 function renderComment(estimate, expected, ctx) {
   const m3 = ctx.language === "ja" ? JA : EN;
   const verdict = judge(estimate.totalDelta, expected);
+  const missing = gaps(estimate);
+  const hasGaps = missing.length > 0;
   const out = [
     marker(ctx.tag),
     m3.headline(signed(estimate.totalDelta)),
     "",
-    m3.verdict(verdict)
+    m3.verdict(verdict, cents(estimate.totalDelta), hasGaps)
   ];
-  if (estimate.notEstimated.length > 0) {
-    out.push("", m3.notEstimatedWarning(estimate.notEstimated.length));
-  }
+  if (hasGaps) out.push("", m3.gapWarning(missing.length));
   out.push(
     "",
     `| | ${m3.summary.monthly} |`,
@@ -56220,9 +56289,7 @@ function renderComment(estimate, expected, ctx) {
     `| ${m3.summary.after} | ${money(estimate.totalAfter)} |`
   );
   if (expected !== void 0) out.push(`| ${m3.summary.expected} | ${signed(expected)} |`);
-  if (estimate.resources.length === 0) {
-    out.push("", m3.noChange);
-  } else {
+  if (estimate.resources.length > 0) {
     out.push(
       "",
       m3.byResource,
@@ -56242,22 +56309,25 @@ function renderComment(estimate, expected, ctx) {
       "",
       "</details>"
     );
+  } else if (!hasGaps) {
+    out.push("", m3.noChange);
   }
-  if (estimate.notEstimated.length > 0) {
+  if (hasGaps) {
     out.push(
       "",
-      m3.notEstimatedTitle(estimate.notEstimated.length),
+      m3.gapTitle(missing.length),
       "",
-      `| ${m3.notEstimatedColumns.join(" | ")} |`,
+      `| ${m3.gapColumns.join(" | ")} |`,
       "|---|---|---|",
-      ...estimate.notEstimated.map(
-        (n3) => `| \`${cell(n3.address)}\` | ${m3.actions[n3.action]} | ${cell(n3.reason)} |`
+      ...missing.map(
+        (g5) => `| \`${cell(g5.address)}\` | ${m3.actions[g5.action]} | ${cell(g5.reason)} |`
       )
     );
   }
   const leftOut = [...new Set(estimate.resources.flatMap((r5) => r5.excluded))];
   out.push("", `<details><summary>${m3.leftOutTitle}</summary>`, "");
   if (leftOut.length > 0) out.push(m3.leftOutIntro, "", ...leftOut.map((x) => `- ${x}`), "");
+  if (estimate.otherProviderCount > 0) out.push(m3.otherProviders(estimate.otherProviderCount), "");
   out.push(m3.assumptionsIntro, "", ...m3.assumptions(ctx).map((x) => `- ${x}`), "", "</details>");
   if (expected === void 0) out.push("", `<sub>${m3.howToDeclare}</sub>`);
   return `${out.join("\n")}
@@ -56276,10 +56346,15 @@ var round = (n3) => Math.round(n3 * 1e4) / 1e4;
 async function estimatePlan(plan, region, pricer) {
   const pending = [];
   const notEstimated = [];
+  let otherProviderCount = 0;
   for (const rc of plan.resource_changes ?? []) {
     if (rc.mode !== void 0 && rc.mode !== "managed") continue;
     const action = toAction(rc.change.actions);
     if (action === void 0) continue;
+    if (!isAwsType(rc.type)) {
+      otherProviderCount += 1;
+      continue;
+    }
     const sides = {
       before: action === "create" ? void 0 : estimateUsage(rc.type, rc.change.before ?? {}, {}, region),
       after: action === "delete" ? void 0 : estimateUsage(rc.type, rc.change.after ?? {}, rc.change.after_unknown ?? {}, region)
@@ -56294,7 +56369,11 @@ async function estimatePlan(plan, region, pricer) {
       action,
       before: sides.before?.lines ?? [],
       after: sides.after?.lines ?? [],
-      excluded: [.../* @__PURE__ */ new Set([...sides.after?.excluded ?? sides.before?.excluded ?? []])]
+      excluded: [.../* @__PURE__ */ new Set([...sides.before?.excluded ?? [], ...sides.after?.excluded ?? []])],
+      partial: [
+        ...(sides.before?.partial ?? []).map((x) => `before the change: ${x}`),
+        ...sides.after?.partial ?? []
+      ]
     });
   }
   const allLines = pending.flatMap((p3) => [...p3.before, ...p3.after]);
@@ -56331,7 +56410,8 @@ async function estimatePlan(plan, region, pricer) {
       after: a5,
       delta: round(a5 - b5),
       lines: shown.map((x) => ({ ...x.line, cost: x.cost ?? 0 })),
-      excluded: p3.excluded
+      excluded: p3.excluded,
+      partial: p3.partial
     });
   }
   resources.sort((x, y) => y.delta - x.delta);
@@ -56340,6 +56420,7 @@ async function estimatePlan(plan, region, pricer) {
   return {
     resources,
     notEstimated,
+    otherProviderCount,
     totalBefore,
     totalAfter,
     totalDelta: round(totalAfter - totalBefore)
@@ -56390,9 +56471,11 @@ async function run(deps) {
     const tag = deps.input("comment-tag");
     const failOnUnexpected = deps.input("fail-on-unexpected") === "true";
     const plan = parsePlan(await deps.readFile(planPath), planPath);
-    const region = deps.input("aws-region") || detectRegion(plan);
+    const region = deps.input("aws-region") || detectRegion(plan) || deps.env("AWS_REGION") || deps.env("AWS_DEFAULT_REGION");
     if (region === void 0) {
-      throw new Error("Could not read the AWS region from the plan. Set the aws-region input.");
+      throw new Error(
+        "Could not find the AWS region in the plan or in AWS_REGION. Set the aws-region input."
+      );
     }
     usageTypePrefix(region);
     const estimate = await estimatePlan(plan, region, deps.createPricer(rateType));
@@ -56403,7 +56486,7 @@ async function run(deps) {
     deps.setOutput("monthly-before", String(estimate.totalBefore));
     deps.setOutput("monthly-after", String(estimate.totalAfter));
     deps.setOutput("unexpected", String(isUnexpected(verdict)));
-    deps.setOutput("not-estimated-count", String(estimate.notEstimated.length));
+    deps.setOutput("not-estimated-count", String(gaps(estimate).length));
     deps.setOutput("region", region);
     await deps.writeSummary(body);
     if (deps.pullRequest !== void 0) {
@@ -56422,7 +56505,9 @@ async function run(deps) {
 }
 async function upsertComment(api, issue2, commentMarker, body) {
   const comments = await api.listComments(issue2);
-  const existing = comments.find((c5) => c5.body?.split("\n", 1)[0] === commentMarker);
+  const existing = comments.findLast(
+    (c5) => c5.user?.type === "Bot" && c5.body?.split("\n", 1)[0] === commentMarker
+  );
   if (existing !== void 0) {
     await api.updateComment({
       owner: issue2.owner,
@@ -56439,6 +56524,7 @@ async function upsertComment(api, issue2, commentMarker, body) {
 var pullRequest = context2.payload.pull_request;
 await run({
   input: (name) => getInput(name),
+  env: (name) => process.env[name],
   readFile: (path) => readFile3(path, "utf8"),
   createPricer: (rateType) => createAwsPricer(rateType),
   pullRequest,

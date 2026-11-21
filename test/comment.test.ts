@@ -20,12 +20,14 @@ const resource = (over: Partial<ResourceEstimate>): ResourceEstimate => ({
     },
   ],
   excluded: ["NAT gateway data processing (per GB)"],
+  partial: [],
   ...over,
 });
 
 const estimate = (over: Partial<PlanEstimate> = {}): PlanEstimate => ({
   resources: [resource({})],
   notEstimated: [],
+  otherProviderCount: 0,
   totalBefore: 0,
   totalAfter: 45.26,
   totalDelta: 45.26,
@@ -60,6 +62,11 @@ describe("judge", () => {
 
   it("asks for an expectation when cost goes up and none is declared", () => {
     expect(judge(45.26, undefined)).toEqual({ kind: "undeclared" });
+  });
+
+  it("ignores differences below a cent", () => {
+    expect(judge(0.001, 0)).toEqual({ kind: "within", expected: 0 });
+    expect(judge(0.004, undefined)).toEqual({ kind: "no-increase" });
   });
 
   it("needs no expectation when cost does not go up", () => {
@@ -136,6 +143,78 @@ describe("renderComment", () => {
       language: "en",
     });
     expect(body).toContain("+$1,346.60");
+  });
+
+  it("never says the cost does not increase when something is not estimated", () => {
+    const body = renderComment(
+      estimate({
+        resources: [],
+        totalAfter: 0,
+        totalDelta: 0,
+        notEstimated: [
+          {
+            address: "aws_rds_cluster.main",
+            type: "aws_rds_cluster",
+            action: "create",
+            reason: "resource type aws_rds_cluster is not supported",
+          },
+        ],
+      }),
+      undefined,
+      { ...ctx, language: "en" },
+    );
+    expect(body).not.toContain("✅");
+    expect(body).not.toContain("No resource in this plan changes the monthly cost");
+    expect(body).toContain("`aws_rds_cluster.main`");
+  });
+
+  it("does not put a check mark on a within verdict when something is not estimated", () => {
+    const body = renderComment(
+      estimate({
+        resources: [resource({ partial: ["root volume size is not known until apply"] })],
+      }),
+      100,
+      { ...ctx, language: "en" },
+    );
+    expect(body).not.toContain("✅");
+  });
+
+  it("lists unpriced parts next to their resource and counts them", () => {
+    const body = renderComment(
+      estimate({
+        resources: [
+          resource({
+            address: "aws_db_instance.db",
+            partial: ["io2 storage and its provisioned IOPS are not supported"],
+          }),
+        ],
+      }),
+      100,
+      { ...ctx, language: "en" },
+    );
+    expect(body).toContain("1 change is not included");
+    expect(body).toMatch(
+      /\| `aws_db_instance\.db` \| create \| io2 storage and its provisioned IOPS are not supported \|/,
+    );
+  });
+
+  it("says the cost goes down less than expected instead of calling it an increase", () => {
+    const body = renderComment(estimate({ totalBefore: 10, totalAfter: 5, totalDelta: -5 }), -20, {
+      ...ctx,
+      language: "en",
+    });
+    expect(body).toContain("[!WARNING]");
+    expect(body).toContain("less");
+    expect(body).not.toContain("increase is intended");
+  });
+
+  it("mentions non-AWS resources only as a count in the footnote", () => {
+    const body = renderComment(estimate({ otherProviderCount: 3 }), 100, {
+      ...ctx,
+      language: "en",
+    });
+    expect(body).toContain("3 changed resources of non-AWS providers");
+    expect(body).not.toContain("[!CAUTION]");
   });
 
   it("writes Japanese when asked", () => {

@@ -1,5 +1,5 @@
 import type { Pricer } from "./pricing.js";
-import { estimateUsage } from "./resources.js";
+import { estimateUsage, isAwsType } from "./resources.js";
 import type { Attributes, UsageLine } from "./types.js";
 
 /** The parts of `terraform show -json <planfile>` this action reads. */
@@ -43,6 +43,8 @@ export interface ResourceEstimate {
   /** Usage lines priced after the change (or before, for deletions). */
   lines: Array<UsageLine & { cost: number }>;
   excluded: string[];
+  /** Parts that would cost money but could not be priced, before or after the change. */
+  partial: string[];
 }
 
 export interface NotEstimated {
@@ -54,7 +56,10 @@ export interface NotEstimated {
 
 export interface PlanEstimate {
   resources: ResourceEstimate[];
+  /** Changed AWS resources that could not be estimated at all. */
   notEstimated: NotEstimated[];
+  /** Number of changed resources of other providers (random, null, tls ...), not priced. */
+  otherProviderCount: number;
   totalBefore: number;
   totalAfter: number;
   totalDelta: number;
@@ -74,6 +79,7 @@ interface Pending {
   before: UsageLine[];
   after: UsageLine[];
   excluded: string[];
+  partial: string[];
 }
 
 /** Round to a hundredth of a cent so float noise does not show up as a change. */
@@ -90,11 +96,16 @@ export async function estimatePlan(
 ): Promise<PlanEstimate> {
   const pending: Pending[] = [];
   const notEstimated: NotEstimated[] = [];
+  let otherProviderCount = 0;
 
   for (const rc of plan.resource_changes ?? []) {
     if (rc.mode !== undefined && rc.mode !== "managed") continue;
     const action = toAction(rc.change.actions);
     if (action === undefined) continue;
+    if (!isAwsType(rc.type)) {
+      otherProviderCount += 1;
+      continue;
+    }
     const sides = {
       before:
         action === "create"
@@ -115,7 +126,11 @@ export async function estimatePlan(
       action,
       before: sides.before?.lines ?? [],
       after: sides.after?.lines ?? [],
-      excluded: [...new Set([...(sides.after?.excluded ?? sides.before?.excluded ?? [])])],
+      excluded: [...new Set([...(sides.before?.excluded ?? []), ...(sides.after?.excluded ?? [])])],
+      partial: [
+        ...(sides.before?.partial ?? []).map((x) => `before the change: ${x}`),
+        ...(sides.after?.partial ?? []),
+      ],
     });
   }
 
@@ -155,6 +170,7 @@ export async function estimatePlan(
       delta: round(a - b),
       lines: shown.map((x) => ({ ...x.line, cost: x.cost ?? 0 })),
       excluded: p.excluded,
+      partial: p.partial,
     });
   }
 
@@ -164,6 +180,7 @@ export async function estimatePlan(
   return {
     resources,
     notEstimated,
+    otherProviderCount,
     totalBefore,
     totalAfter,
     totalDelta: round(totalAfter - totalBefore),

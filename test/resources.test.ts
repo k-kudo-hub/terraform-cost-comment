@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { estimateUsage, isSupportedType } from "../src/resources.js";
+import { estimateUsage, isAwsType, isSupportedType } from "../src/resources.js";
 
 const TOKYO = "ap-northeast-1";
 const VIRGINIA = "us-east-1";
@@ -57,7 +57,22 @@ describe("aws_instance", () => {
       root_block_device: [{ volume_size: true }],
     });
     expect(r.lines).toHaveLength(1);
-    expect(r.excluded.join(" ")).toContain("root volume");
+    expect(r.partial).toEqual(["root volume size is not known until apply"]);
+  });
+
+  it("reports the root volume when the whole block is not known until apply", () => {
+    const r = usage("aws_instance", { instance_type: "t3.micro" }, TOKYO, {
+      root_block_device: true,
+    });
+    expect(r.partial).toEqual(["root volume size (from the AMI) is not known until apply"]);
+  });
+
+  it("does not flag extra EBS volumes that are not configured", () => {
+    const r = usage("aws_instance", { instance_type: "t3.micro" }, TOKYO, {
+      ebs_block_device: true,
+      root_block_device: [{ iops: true, throughput: true }],
+    });
+    expect(r.partial).toEqual([]);
   });
 
   it("cannot estimate an instance whose type is unknown", () => {
@@ -115,6 +130,12 @@ describe("aws_ebs_volume", () => {
       ["sc1", "EBS:VolumeUsage.sc1", "CreateVolume-Sc1"],
       ["standard", "EBS:VolumeUsage", "CreateVolume"],
     ]);
+  });
+
+  it("reports io1 IOPS that are not known until apply", () => {
+    const r = usage("aws_ebs_volume", { type: "io1", size: 100 }, TOKYO, { iops: true });
+    expect(r.lines).toHaveLength(1);
+    expect(r.partial).toEqual(["volume IOPS is not known until apply"]);
   });
 
   it("cannot estimate a volume whose size is unknown (for example from a snapshot)", () => {
@@ -176,7 +197,32 @@ describe("aws_db_instance", () => {
       iops: 1000,
     });
     expect(r.lines).toHaveLength(1);
-    expect(r.excluded.join(" ")).toContain("io1");
+    expect(r.partial).toEqual(["io1 storage and its provisioned IOPS are not supported"]);
+  });
+
+  it("does not flag gp3 storage left at its baseline performance", () => {
+    const r = usage(
+      "aws_db_instance",
+      {
+        engine: "mysql",
+        instance_class: "db.t3.micro",
+        allocated_storage: 20,
+        storage_type: "gp3",
+      },
+      TOKYO,
+      { iops: true, storage_throughput: true },
+    );
+    expect(r.partial).toEqual([]);
+  });
+
+  it("reports storage whose size is not known until apply", () => {
+    const r = usage(
+      "aws_db_instance",
+      { engine: "mysql", instance_class: "db.t3.micro", storage_type: "gp3" },
+      TOKYO,
+      { allocated_storage: true },
+    );
+    expect(r.partial).toEqual(["storage size is not known until apply"]);
   });
 });
 
@@ -214,7 +260,20 @@ describe("aws_lb", () => {
     );
   });
 
+  it("cannot estimate a load balancer whose type is not known until apply", () => {
+    expect(usage("aws_lb", {}, TOKYO, { load_balancer_type: true }).unestimable).toBeDefined();
+  });
+
   it("treats aws_alb as an alias of aws_lb", () => {
     expect(usage("aws_alb", {}).lines[0]?.operation).toBe("LoadBalancing:Application");
+  });
+});
+
+describe("isAwsType", () => {
+  it("recognizes the aws and awscc providers only", () => {
+    expect(isAwsType("aws_s3_bucket")).toBe(true);
+    expect(isAwsType("awscc_s3_bucket")).toBe(true);
+    expect(isAwsType("random_id")).toBe(false);
+    expect(isAwsType("awsx_thing")).toBe(false);
   });
 });

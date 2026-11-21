@@ -1,5 +1,6 @@
 import type { RateType } from "@aws-sdk/client-bcm-pricing-calculator";
 import {
+  gaps,
   isUnexpected,
   judge,
   type Language,
@@ -14,6 +15,8 @@ import { usageTypePrefix } from "./regions.js";
 /** Everything the action touches outside itself, so it can be tested without GitHub or AWS. */
 export interface RunDeps {
   input(name: string): string;
+  /** Environment variable, for the region set by aws-actions/configure-aws-credentials. */
+  env(name: string): string | undefined;
   readFile(path: string): Promise<string>;
   createPricer(rateType: RateType): Pricer;
   /** Set when the workflow runs for a pull request. */
@@ -61,9 +64,15 @@ export async function run(deps: RunDeps): Promise<void> {
     const failOnUnexpected = deps.input("fail-on-unexpected") === "true";
 
     const plan = parsePlan(await deps.readFile(planPath), planPath);
-    const region = deps.input("aws-region") || detectRegion(plan);
+    const region =
+      deps.input("aws-region") ||
+      detectRegion(plan) ||
+      deps.env("AWS_REGION") ||
+      deps.env("AWS_DEFAULT_REGION");
     if (region === undefined) {
-      throw new Error("Could not read the AWS region from the plan. Set the aws-region input.");
+      throw new Error(
+        "Could not find the AWS region in the plan or in AWS_REGION. Set the aws-region input.",
+      );
     }
     usageTypePrefix(region); // fails early on an unsupported region
 
@@ -76,7 +85,7 @@ export async function run(deps: RunDeps): Promise<void> {
     deps.setOutput("monthly-before", String(estimate.totalBefore));
     deps.setOutput("monthly-after", String(estimate.totalAfter));
     deps.setOutput("unexpected", String(isUnexpected(verdict)));
-    deps.setOutput("not-estimated-count", String(estimate.notEstimated.length));
+    deps.setOutput("not-estimated-count", String(gaps(estimate).length));
     deps.setOutput("region", region);
 
     await deps.writeSummary(body);
@@ -104,7 +113,7 @@ export interface CommentApi {
     owner: string;
     repo: string;
     issue_number: number;
-  }): Promise<Array<{ id: number; body?: string | null }>>;
+  }): Promise<Array<{ id: number; body?: string | null; user?: { type?: string } | null }>>;
   createComment(params: {
     owner: string;
     repo: string;
@@ -127,7 +136,10 @@ export async function upsertComment(
   body: string,
 ): Promise<void> {
   const comments = await api.listComments(issue);
-  const existing = comments.find((c) => c.body?.split("\n", 1)[0] === commentMarker);
+  // Only bot comments: the default token posts as github-actions[bot] and cannot edit people's comments.
+  const existing = comments.findLast(
+    (c) => c.user?.type === "Bot" && c.body?.split("\n", 1)[0] === commentMarker,
+  );
   if (existing !== undefined) {
     await api.updateComment({
       owner: issue.owner,

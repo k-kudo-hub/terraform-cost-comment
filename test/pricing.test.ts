@@ -29,14 +29,20 @@ describe("createAwsPricer", () => {
   });
 
   it("splits more than 500 lines into several requests", async () => {
+    // The fake prices each line by the number in its usage type, so a mix-up shows.
     const send = vi.fn(async (cmd: Cmd) => ({
-      lineItems: usageOf(cmd).map((u) => ({ key: u.key, estimatedCost: { cost: 1 } })),
+      lineItems: usageOf(cmd)
+        .map((u) => ({
+          key: u.key,
+          estimatedCost: { cost: Number(u.usageType?.replace(/\D/g, "")) },
+        }))
+        .reverse(),
     }));
     const lines = Array.from({ length: 1201 }, (_, i) => line(i));
     const result = await createAwsPricer("BEFORE_DISCOUNTS", { send })(lines);
     expect(send.mock.calls.map((c) => usageOf(c[0]).length)).toEqual([500, 500, 201]);
     expect(result.prices).toHaveLength(1201);
-    expect(result.prices.every((p) => p.cost === 1)).toBe(true);
+    expect(result.prices.map((p) => p.cost)).toEqual(lines.map((_, i) => i));
     for (const call of send.mock.calls) {
       for (const u of usageOf(call[0])) expect(u.key).toMatch(/^[a-zA-Z0-9]{1,10}$/);
     }

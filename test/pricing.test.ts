@@ -2,13 +2,14 @@ import type { GetUsageLinesEstimatedCostCommand } from "@aws-sdk/client-bcm-pric
 import { describe, expect, it, vi } from "vitest";
 import { createAwsPricer } from "../src/pricing.js";
 import type { UsageLine } from "../src/types.js";
+import { same } from "./helpers.js";
 
 const line = (i: number): UsageLine => ({
   serviceCode: "AmazonEC2",
   usageType: `BoxUsage:t${i}`,
   operation: "RunInstances",
   amount: 730,
-  description: `line ${i}`,
+  description: same(`line ${i}`),
 });
 
 type Cmd = GetUsageLinesEstimatedCostCommand;

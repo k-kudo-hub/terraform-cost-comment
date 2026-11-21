@@ -19654,8 +19654,8 @@ var require_lib = __commonJS({
             onResult(err, res);
           }
         }
-        const req = info2.httpModule.request(info2.options, (msg) => {
-          const res = new HttpClientResponse(msg);
+        const req = info2.httpModule.request(info2.options, (msg2) => {
+          const res = new HttpClientResponse(msg2);
           handleResult(void 0, res);
         });
         let socket;
@@ -19911,15 +19911,15 @@ var require_lib = __commonJS({
             } catch (err) {
             }
             if (statusCode > 299) {
-              let msg;
+              let msg2;
               if (obj && obj.message) {
-                msg = obj.message;
+                msg2 = obj.message;
               } else if (contents && contents.length > 0) {
-                msg = contents;
+                msg2 = contents;
               } else {
-                msg = `Failed request: (${statusCode})`;
+                msg2 = `Failed request: (${statusCode})`;
               }
-              const err = new HttpClientError(msg, statusCode);
+              const err = new HttpClientError(msg2, statusCode);
               err.result = response.result;
               reject(err);
             } else {
@@ -28443,8 +28443,8 @@ var init_MessageEncoderStream = __esm({
         return this.asyncIterator();
       }
       async *asyncIterator() {
-        for await (const msg of this.options.messageStream) {
-          const encoded = this.options.encoder.encode(msg);
+        for await (const msg2 of this.options.messageStream) {
+          const encoded = this.options.encoder.encode(msg2);
           yield encoded;
         }
         if (this.options.includeEndFrame) {
@@ -38537,17 +38537,17 @@ var require_dist_cjs5 = __commonJS({
     var setRequestTimeout = (req, reject, timeoutInMs = 0, throwOnRequestTimeout, logger2) => {
       if (timeoutInMs) {
         return timing.setTimeout(() => {
-          let msg = `@smithy/node-http-handler - [${throwOnRequestTimeout ? "ERROR" : "WARN"}] a request has exceeded the configured ${timeoutInMs} ms requestTimeout.`;
+          let msg2 = `@smithy/node-http-handler - [${throwOnRequestTimeout ? "ERROR" : "WARN"}] a request has exceeded the configured ${timeoutInMs} ms requestTimeout.`;
           if (throwOnRequestTimeout) {
-            const error3 = Object.assign(new Error(msg), {
+            const error3 = Object.assign(new Error(msg2), {
               name: "TimeoutError",
               code: "ETIMEDOUT"
             });
             req.destroy(error3);
             reject(error3);
           } else {
-            msg += ` Init client requestHandler with throwOnRequestTimeout=true to turn this into an error.`;
-            logger2?.warn?.(msg);
+            msg2 += ` Init client requestHandler with throwOnRequestTimeout=true to turn this into an error.`;
+            logger2?.warn?.(msg2);
           }
         }, timeoutInMs);
       }
@@ -41178,15 +41178,15 @@ var init_ProtocolLib = __esm({
       }
       decorateServiceException(exception, additions = {}) {
         if (this.queryCompat) {
-          const msg = exception.Message ?? additions.Message;
+          const msg2 = exception.Message ?? additions.Message;
           const error3 = decorateServiceException(exception, additions);
-          if (msg) {
-            error3.message = msg;
+          if (msg2) {
+            error3.message = msg2;
           }
           const errorObj = error3.Error ?? {};
           errorObj.Type = error3.Error?.Type;
           errorObj.Code = error3.Error?.Code;
-          errorObj.Message = error3.Error?.message ?? error3.Error?.Message ?? msg;
+          errorObj.Message = error3.Error?.message ?? error3.Error?.Message ?? msg2;
           error3.Error = errorObj;
           const reqId = error3.$metadata.requestId;
           if (reqId) {
@@ -55819,6 +55819,65 @@ function createAwsPricer(rateType, client = new import_client_bcm_pricing_calcul
   };
 }
 
+// src/plan-config.ts
+function splitAddress(address) {
+  const parts = address.match(/(?:[^.["]+|\[[^\]]*\]|"[^"]*")+/g) ?? [];
+  const modules = [];
+  let i5 = 0;
+  while (parts[i5] === "module" && parts[i5 + 1] !== void 0) {
+    modules.push((parts[i5 + 1] ?? "").replace(/\[.*\]$/, ""));
+    i5 += 2;
+  }
+  const local = parts.slice(i5).join(".").replace(/\[[^\]]*\]$/, "");
+  return { modules, local };
+}
+function configResource(root5, address) {
+  const { modules, local } = splitAddress(address);
+  let mod = root5;
+  for (const name of modules) mod = mod?.module_calls?.[name]?.module;
+  return mod?.resources?.find((r5) => r5.address === local);
+}
+function expression(block, key) {
+  const e5 = block?.expressions?.[key];
+  return typeof e5 === "object" && e5 !== null ? e5 : void 0;
+}
+function clusterStorage(cluster, root5) {
+  const after = cluster.change.after ?? cluster.change.before ?? {};
+  const unknown = cluster.change.after_unknown ?? {};
+  if (unknown.storage_type !== true) {
+    const v = after.storage_type;
+    if (v === void 0 || v === null || v === "" || v === "aurora") return "aurora";
+    return typeof v === "string" ? v : void 0;
+  }
+  const config = configResource(root5, cluster.address);
+  if (config === void 0) return void 0;
+  const e5 = expression(config, "storage_type");
+  if (e5 === void 0) return "aurora";
+  return typeof e5.constant_value === "string" ? e5.constant_value || "aurora" : void 0;
+}
+function auroraStorageType(instance2, changes, root5) {
+  const clusters = changes.filter((c5) => c5.type === "aws_rds_cluster");
+  const attrs = instance2.change.after ?? instance2.change.before ?? {};
+  const id = attrs.cluster_identifier;
+  if (typeof id === "string" && id !== "") {
+    const match = clusters.find(
+      (c5) => (c5.change.after ?? c5.change.before)?.cluster_identifier === id
+    );
+    return match === void 0 ? void 0 : clusterStorage(match, root5);
+  }
+  const refs = expression(configResource(root5, instance2.address), "cluster_identifier")?.references;
+  const ref = refs?.find((r5) => r5.startsWith("aws_rds_cluster."));
+  if (ref === void 0) return void 0;
+  const target = ref.split(".").slice(0, 2).join(".").replace(/\[.*$/, "");
+  const { modules } = splitAddress(instance2.address);
+  const candidates = clusters.filter((c5) => {
+    const s2 = splitAddress(c5.address);
+    return s2.local === target && s2.modules.join(".") === modules.join(".");
+  });
+  const types = new Set(candidates.map((c5) => clusterStorage(c5, root5)));
+  return types.size === 1 ? [...types][0] : void 0;
+}
+
 // src/regions.ts
 var REGION_PREFIX = {
   "af-south-1": "AFS1-",
@@ -55870,8 +55929,12 @@ function usageTypePrefix(region, style = "default") {
   return prefix;
 }
 
+// src/types.ts
+var msg = (en, ja) => ({ en, ja });
+
 // src/resources.ts
 var HOURS_PER_MONTH = 730;
+var H = HOURS_PER_MONTH;
 var isUnknown = (unknown, key) => unknown[key] === true;
 var str = (attrs, key) => {
   const v = attrs[key];
@@ -55898,6 +55961,36 @@ var unestimable = (reason) => ({
   partial: [],
   unestimable: reason
 });
+var unknownUntilApply = (what, plural = false) => msg(
+  `${what.en} ${plural ? "are" : "is"} not known until apply`,
+  `${what.ja}\u304C apply \u307E\u3067\u5206\u304B\u3089\u306A\u3044`
+);
+var notSupported = (what, value) => msg(`${what.en} "${value}" is not supported`, `${what.ja}\u300C${value}\u300D\u306B\u306F\u5BFE\u5FDC\u3057\u3066\u3044\u306A\u3044`);
+var W = {
+  engine: msg("engine", "\u30A8\u30F3\u30B8\u30F3"),
+  instanceType: msg("instance type", "\u30A4\u30F3\u30B9\u30BF\u30F3\u30B9\u30BF\u30A4\u30D7"),
+  instanceClass: msg("instance class", "\u30A4\u30F3\u30B9\u30BF\u30F3\u30B9\u30AF\u30E9\u30B9"),
+  nodeType: msg("node type", "\u30CE\u30FC\u30C9\u30BF\u30A4\u30D7"),
+  nodes: msg("number of nodes", "\u30CE\u30FC\u30C9\u6570"),
+  multiAz: msg("Multi-AZ", "\u30DE\u30EB\u30C1 AZ \u306B\u3059\u308B\u304B"),
+  storageSize: msg("storage size", "\u30B9\u30C8\u30EC\u30FC\u30B8\u306E\u30B5\u30A4\u30BA"),
+  storageType: msg("storage type", "\u30B9\u30C8\u30EC\u30FC\u30B8\u306E\u7A2E\u985E"),
+  piops: msg("provisioned IOPS", "\u30D7\u30ED\u30D3\u30B8\u30E7\u30F3\u30C9 IOPS"),
+  lbType: msg("load balancer type", "\u30ED\u30FC\u30C9\u30D0\u30E9\u30F3\u30B5\u30FC\u306E\u7A2E\u985E"),
+  endpointType: msg("endpoint type", "\u30A8\u30F3\u30C9\u30DD\u30A4\u30F3\u30C8\u306E\u7A2E\u985E"),
+  subnets: msg("number of subnets", "\u30B5\u30D6\u30CD\u30C3\u30C8\u6570"),
+  instances: msg("number of instances", "\u30A4\u30F3\u30B9\u30BF\u30F3\u30B9\u6570"),
+  masters: msg("dedicated master nodes", "\u5C02\u7528\u30DE\u30B9\u30BF\u30FC\u30CE\u30FC\u30C9"),
+  ebsStorage: msg("EBS storage", "EBS \u30B9\u30C8\u30EC\u30FC\u30B8"),
+  tenancy: msg("tenancy", "\u30C6\u30CA\u30F3\u30B7\u30FC"),
+  engineMode: msg("engine mode", "\u30A8\u30F3\u30B8\u30F3\u30E2\u30FC\u30C9"),
+  membership: msg("replication group membership", "\u30EC\u30D7\u30EA\u30B1\u30FC\u30B7\u30E7\u30F3\u30B0\u30EB\u30FC\u30D7\u306B\u52A0\u308F\u308B\u304B")
+};
+var DATA_TRANSFER = msg("data transfer", "\u30C7\u30FC\u30BF\u8EE2\u9001");
+var GP3_ABOVE_BASELINE = msg(
+  "gp3 IOPS and throughput above the baseline are not supported",
+  "\u57FA\u6E96\u3092\u8D85\u3048\u308B gp3 \u306E IOPS \u3068\u30B9\u30EB\u30FC\u30D7\u30C3\u30C8\u306B\u306F\u5BFE\u5FDC\u3057\u3066\u3044\u306A\u3044"
+);
 var EBS_TYPES = {
   gp2: { storage: "EBS:VolumeUsage.gp2", operation: "CreateVolume-Gp2" },
   gp3: { storage: "EBS:VolumeUsage.gp3", operation: "CreateVolume-Gp3" },
@@ -55910,21 +56003,25 @@ var EBS_TYPES = {
 var GP3_FREE_IOPS = 3e3;
 var GP3_FREE_THROUGHPUT_MIBPS = 125;
 var IO2_TIERS = [
-  { suffix: "", size: 32e3 },
-  { suffix: ".tier2", size: 32e3 },
-  { suffix: ".tier3", size: Number.POSITIVE_INFINITY }
+  { suffix: "", size: 32e3, ja: "" },
+  { suffix: ".tier2", size: 32e3, ja: "\uFF08\u7B2C2\u6BB5\u968E\uFF09" },
+  { suffix: ".tier3", size: Number.POSITIVE_INFINITY, ja: "\uFF08\u7B2C3\u6BB5\u968E\uFF09" }
 ];
+var VOLUME = msg("volume", "\u30DC\u30EA\u30E5\u30FC\u30E0");
+var ROOT_VOLUME = msg("root volume", "\u30EB\u30FC\u30C8\u30DC\u30EA\u30E5\u30FC\u30E0");
+var EBS_VOLUME = msg("EBS volume", "EBS \u30DC\u30EA\u30E5\u30FC\u30E0");
 function ebsLines(spec, prefix) {
   const { label, type, size, iops, throughput } = spec;
+  const of = (en, ja) => msg(`${label.en} ${en}`, `${label.ja}\u306E${ja}`);
   if (size === void 0 || size === "unknown") {
-    return { lines: [], partial: [], unestimable: `${label} size is not known until apply` };
+    return { lines: [], partial: [], unestimable: unknownUntilApply(of("size", "\u30B5\u30A4\u30BA")) };
   }
   if (type === void 0 || type === "unknown") {
-    return { lines: [], partial: [], unestimable: `${label} type is not known until apply` };
+    return { lines: [], partial: [], unestimable: unknownUntilApply(of("type", "\u7A2E\u985E")) };
   }
   const t = EBS_TYPES[type];
   if (t === void 0) {
-    return { lines: [], partial: [], unestimable: `${label} type "${type}" is not supported` };
+    return { lines: [], partial: [], unestimable: notSupported(of("type", "\u7A2E\u985E"), type) };
   }
   const line = (usageType, amount, description) => ({
     serviceCode: "AmazonEC2",
@@ -55933,17 +56030,23 @@ function ebsLines(spec, prefix) {
     amount,
     description
   });
-  const lines = [line(t.storage, size, `${label} ${type} ${size} GB`)];
+  const lines = [
+    line(t.storage, size, msg(`${label.en} ${type} ${size} GB`, `${label.ja} ${type} ${size} GB`))
+  ];
   const partial = [];
   if ((type === "io1" || type === "io2") && iops === "unknown") {
-    partial.push(`${label} IOPS is not known until apply`);
+    partial.push(unknownUntilApply(of("IOPS", "IOPS")));
   }
   const knownIops = typeof iops === "number" ? iops : void 0;
   const knownThroughput = typeof throughput === "number" ? throughput : void 0;
   if (type === "gp3") {
     if (knownIops !== void 0 && knownIops > GP3_FREE_IOPS) {
       lines.push(
-        line("EBS:VolumeP-IOPS.gp3", knownIops - GP3_FREE_IOPS, `${label} IOPS above 3,000`)
+        line(
+          "EBS:VolumeP-IOPS.gp3",
+          knownIops - GP3_FREE_IOPS,
+          of("IOPS above 3,000", "3,000 \u3092\u8D85\u3048\u308B IOPS")
+        )
       );
     }
     if (knownThroughput !== void 0 && knownThroughput > GP3_FREE_THROUGHPUT_MIBPS) {
@@ -55951,12 +56054,18 @@ function ebsLines(spec, prefix) {
         line(
           "EBS:VolumeP-Throughput.gp3",
           (knownThroughput - GP3_FREE_THROUGHPUT_MIBPS) / 1024,
-          `${label} throughput above 125 MiB/s`
+          of("throughput above 125 MiB/s", "125 MiB/s \u3092\u8D85\u3048\u308B\u30B9\u30EB\u30FC\u30D7\u30C3\u30C8")
         )
       );
     }
   } else if (type === "io1" && knownIops !== void 0 && knownIops > 0) {
-    lines.push(line("EBS:VolumeP-IOPS.piops", knownIops, `${label} ${knownIops} provisioned IOPS`));
+    lines.push(
+      line(
+        "EBS:VolumeP-IOPS.piops",
+        knownIops,
+        of(`${knownIops} provisioned IOPS`, `\u30D7\u30ED\u30D3\u30B8\u30E7\u30F3\u30C9 IOPS ${knownIops}`)
+      )
+    );
   } else if (type === "io2" && knownIops !== void 0 && knownIops > 0) {
     let rest = knownIops;
     for (const tier of IO2_TIERS) {
@@ -55966,7 +56075,7 @@ function ebsLines(spec, prefix) {
         line(
           `EBS:VolumeP-IOPS.io2${tier.suffix}`,
           amount,
-          `${label} provisioned IOPS${tier.suffix}`
+          of(`provisioned IOPS${tier.suffix}`, `\u30D7\u30ED\u30D3\u30B8\u30E7\u30F3\u30C9 IOPS${tier.ja}`)
         )
       );
       rest -= amount;
@@ -55986,7 +56095,7 @@ var ebsVolume = (attrs, unknown, prefix, env2) => {
   const type = readSet(str, attrs, unknown, "type", env2);
   const result = ebsLines(
     {
-      label: "volume",
+      label: VOLUME,
       type: type ?? "gp2",
       size: read(num, attrs, unknown, "size"),
       iops: read(num, attrs, unknown, "iops"),
@@ -55995,35 +56104,47 @@ var ebsVolume = (attrs, unknown, prefix, env2) => {
     prefix
   );
   if (result.unestimable !== void 0) return unestimable(result.unestimable);
-  return { lines: result.lines, partial: result.partial, excluded: ["EBS snapshots"] };
+  return {
+    lines: result.lines,
+    partial: result.partial,
+    excluded: [msg("EBS snapshots", "EBS \u306E\u30B9\u30CA\u30C3\u30D7\u30B7\u30E7\u30C3\u30C8")]
+  };
 };
 var instance = (attrs, unknown, prefix, env2) => {
   const type = str(attrs, "instance_type");
   if (type === void 0 || isUnknown(unknown, "instance_type")) {
-    return unestimable("instance type is not known until apply");
+    return unestimable(unknownUntilApply(W.instanceType));
   }
   const tenancy = str(attrs, "tenancy");
   if (tenancy !== void 0 && tenancy !== "default") {
-    return unestimable(`tenancy "${tenancy}" is not supported`);
+    return unestimable(notSupported(W.tenancy, tenancy));
   }
   const lines = [
     {
       serviceCode: "AmazonEC2",
       usageType: `${prefix}BoxUsage:${type}`,
       operation: "RunInstances",
-      amount: HOURS_PER_MONTH,
-      description: `${type} Linux on-demand (${HOURS_PER_MONTH} h)`
+      amount: H,
+      description: msg(
+        `${type} Linux on-demand (${H} h)`,
+        `${type} Linux \u30AA\u30F3\u30C7\u30DE\u30F3\u30C9\uFF08${H} \u6642\u9593\uFF09`
+      )
     }
   ];
   const partial = [];
   const volumes = [
-    ["root_block_device", "root volume"],
-    ["ebs_block_device", "EBS volume"]
+    ["root_block_device", ROOT_VOLUME],
+    ["ebs_block_device", EBS_VOLUME]
   ];
   for (const [key, label] of volumes) {
     if (isUnknown(unknown, key)) {
-      if (key === "root_block_device")
-        partial.push("root volume size (from the AMI) is not known until apply");
+      if (key === "root_block_device") {
+        partial.push(
+          unknownUntilApply(
+            msg("root volume size (from the AMI)", "\u30EB\u30FC\u30C8\u30DC\u30EA\u30E5\u30FC\u30E0\u306E\u30B5\u30A4\u30BA\uFF08AMI \u3067\u6C7A\u307E\u308B\uFF09")
+          )
+        );
+      }
       continue;
     }
     blocks(attrs, key).forEach((block, i5) => {
@@ -56043,11 +56164,19 @@ var instance = (attrs, unknown, prefix, env2) => {
       if (result.unestimable !== void 0) partial.push(result.unestimable);
     });
   }
-  const excluded = ["EC2 operating system licenses other than Linux", "data transfer"];
+  const excluded = [
+    msg("EC2 operating system licenses other than Linux", "Linux \u4EE5\u5916\u306E EC2 \u306E OS \u30E9\u30A4\u30BB\u30F3\u30B9"),
+    DATA_TRANSFER
+  ];
   if (attrs.associate_public_ip_address === true) {
-    lines.push(publicIpv4(env2, "public IPv4 address"));
+    lines.push(publicIpv4(env2));
   } else if (isUnknown(unknown, "associate_public_ip_address")) {
-    excluded.push("EC2 public IPv4 address when the subnet assigns one");
+    excluded.push(
+      msg(
+        "EC2 public IPv4 address when the subnet assigns one",
+        "\u30B5\u30D6\u30CD\u30C3\u30C8\u304C\u5272\u308A\u5F53\u3066\u308B EC2 \u306E\u30D1\u30D6\u30EA\u30C3\u30AF IPv4 \u30A2\u30C9\u30EC\u30B9"
+      )
+    );
   }
   return { lines, partial, excluded };
 };
@@ -56071,76 +56200,88 @@ var RDS_STORAGE = {
     iops: { single: "RDS:IO2-PIOPS", multi: "RDS:Multi-AZ-IO2-PIOPS" }
   }
 };
+var storageLine = (type, size, suffix = "") => msg(`${type} storage ${size} GB${suffix}`, `${type} \u30B9\u30C8\u30EC\u30FC\u30B8 ${size} GB${suffix}`);
 var dbInstance = (attrs, unknown, prefix, env2) => {
   const engine = str(attrs, "engine");
   if (engine === void 0 || isUnknown(unknown, "engine")) {
-    return unestimable("engine is not known until apply");
+    return unestimable(unknownUntilApply(W.engine));
   }
   const operation2 = RDS_ENGINES[engine];
-  if (operation2 === void 0) return unestimable(`engine "${engine}" is not supported`);
+  if (operation2 === void 0) return unestimable(notSupported(W.engine, engine));
   const cls = str(attrs, "instance_class");
   if (cls === void 0 || isUnknown(unknown, "instance_class")) {
-    return unestimable("instance class is not known until apply");
+    return unestimable(unknownUntilApply(W.instanceClass));
   }
   const multiAzValue = readSet((a5, k5) => a5[k5], attrs, unknown, "multi_az", env2);
-  if (multiAzValue === "unknown") return unestimable("Multi-AZ is not known until apply");
+  if (multiAzValue === "unknown") return unestimable(unknownUntilApply(W.multiAz));
   const multiAz = multiAzValue === true;
-  const azNote = multiAzValue === void 0 ? " Single-AZ (multi_az not set)" : "";
+  const az = multiAz ? msg(" Multi-AZ", " \u30DE\u30EB\u30C1 AZ") : multiAzValue === void 0 ? msg(" Single-AZ (multi_az not set)", " \u30B7\u30F3\u30B0\u30EB AZ\u30FBmulti_az \u306E\u6307\u5B9A\u306A\u3057") : msg("", "");
   const lines = [
     {
       serviceCode: "AmazonRDS",
       usageType: `${prefix}${multiAz ? "Multi-AZUsage" : "InstanceUsage"}:${cls}`,
       operation: operation2,
-      amount: HOURS_PER_MONTH,
-      description: `${cls} ${engine}${multiAz ? " Multi-AZ" : azNote} (${HOURS_PER_MONTH} h)`
+      amount: H,
+      description: msg(
+        `${cls} ${engine}${az.en} (${H} h)`,
+        `${cls} ${engine}${az.ja}\uFF08${H} \u6642\u9593\uFF09`
+      )
     }
   ];
   const partial = [];
-  const excluded = [];
   const setType = readSet(str, attrs, unknown, "storage_type", env2);
   const iopsWritten = typeof attrs.iops === "number" || env2.context.configured?.has("iops") === true;
   const iopsKnown = typeof attrs.iops === "number";
   const storageType = setType !== void 0 ? setType : iopsWritten ? iopsKnown ? "io1" : "unknown" : "gp3";
   const size = read(num, attrs, unknown, "allocated_storage");
   if (size === void 0 || size === "unknown") {
-    partial.push("storage size is not known until apply");
+    partial.push(unknownUntilApply(W.storageSize));
   } else if (storageType === void 0 || storageType === "unknown") {
-    partial.push("storage type is not known until apply");
+    partial.push(unknownUntilApply(W.storageType));
   } else {
     const storage = RDS_STORAGE[storageType];
     if (storage === void 0) {
-      partial.push(`${storageType} storage is not supported`);
+      partial.push(notSupported(W.storageType, storageType));
     } else {
       lines.push({
         serviceCode: "AmazonRDS",
         usageType: prefix + (multiAz ? storage.multi : storage.single),
         operation: operation2,
         amount: size,
-        description: `${storageType} storage ${size} GB`
+        description: storageLine(storageType, size)
       });
       if (storage.iops !== void 0) {
         const piops = read(num, attrs, unknown, "iops");
         if (piops === "unknown") {
-          partial.push("provisioned IOPS is not known until apply");
+          partial.push(unknownUntilApply(W.piops));
         } else if (piops !== void 0 && piops > 0) {
           lines.push({
             serviceCode: "AmazonRDS",
             usageType: prefix + (multiAz ? storage.iops.multi : storage.iops.single),
             operation: operation2,
             amount: piops,
-            description: `${piops} provisioned IOPS`
+            description: msg(`${piops} provisioned IOPS`, `\u30D7\u30ED\u30D3\u30B8\u30E7\u30F3\u30C9 IOPS ${piops}`)
           });
         }
       }
       const iops = num(attrs, "iops");
       const throughput = num(attrs, "storage_throughput");
       if (storageType === "gp3" && ((iops ?? 0) > 3e3 || (throughput ?? 0) > 125)) {
-        partial.push("gp3 IOPS and throughput above the baseline are not supported");
+        partial.push(GP3_ABOVE_BASELINE);
       }
     }
   }
-  excluded.push("RDS backup storage beyond the free allowance", "data transfer");
-  return { lines, partial, excluded };
+  return {
+    lines,
+    partial,
+    excluded: [
+      msg(
+        "RDS backup storage beyond the free allowance",
+        "\u7121\u6599\u67A0\u3092\u8D85\u3048\u308B RDS \u306E\u30D0\u30C3\u30AF\u30A2\u30C3\u30D7\u30B9\u30C8\u30EC\u30FC\u30B8"
+      ),
+      DATA_TRANSFER
+    ]
+  };
 };
 var natGateway = (_attrs, _unknown, prefix) => ({
   lines: [
@@ -56148,50 +56289,65 @@ var natGateway = (_attrs, _unknown, prefix) => ({
       serviceCode: "AmazonEC2",
       usageType: `${prefix}NatGateway-Hours`,
       operation: "NatGateway",
-      amount: HOURS_PER_MONTH,
-      description: `NAT gateway (${HOURS_PER_MONTH} h)`
+      amount: H,
+      description: msg(`NAT gateway (${H} h)`, `NAT \u30B2\u30FC\u30C8\u30A6\u30A7\u30A4\uFF08${H} \u6642\u9593\uFF09`)
     }
   ],
   partial: [],
-  excluded: ["NAT gateway data processing (per GB)"]
+  excluded: [
+    msg("NAT gateway data processing (per GB)", "NAT \u30B2\u30FC\u30C8\u30A6\u30A7\u30A4\u306E\u30C7\u30FC\u30BF\u51E6\u7406\uFF08GB \u5358\u4F4D\uFF09")
+  ]
 });
 var LB_OPERATIONS = {
   application: "LoadBalancing:Application",
   network: "LoadBalancing:Network",
   gateway: "LoadBalancing:Gateway"
 };
+var LB_NAMES_JA = {
+  application: "Application Load Balancer",
+  network: "Network Load Balancer",
+  gateway: "Gateway Load Balancer"
+};
 var loadBalancer = (attrs, unknown, prefix) => {
   if (isUnknown(unknown, "load_balancer_type")) {
-    return unestimable("load balancer type is not known until apply");
+    return unestimable(unknownUntilApply(W.lbType));
   }
   const type = str(attrs, "load_balancer_type") ?? "application";
   const operation2 = LB_OPERATIONS[type];
-  if (operation2 === void 0) return unestimable(`load balancer type "${type}" is not supported`);
+  if (operation2 === void 0) return unestimable(notSupported(W.lbType, type));
   return {
     lines: [
       {
         serviceCode: "AWSELB",
         usageType: `${prefix}LoadBalancerUsage`,
         operation: operation2,
-        amount: HOURS_PER_MONTH,
-        description: `${type} load balancer (${HOURS_PER_MONTH} h)`
+        amount: H,
+        description: msg(
+          `${type} load balancer (${H} h)`,
+          `${LB_NAMES_JA[type] ?? type}\uFF08${H} \u6642\u9593\uFF09`
+        )
       }
     ],
     partial: [],
-    excluded: ["load balancer capacity units (LCU, depend on traffic)"]
+    excluded: [
+      msg(
+        "load balancer capacity units (LCU, depend on traffic)",
+        "\u30ED\u30FC\u30C9\u30D0\u30E9\u30F3\u30B5\u30FC\u306E\u30AD\u30E3\u30D1\u30B7\u30C6\u30A3\u30E6\u30CB\u30C3\u30C8\uFF08LCU\u3002\u901A\u4FE1\u91CF\u3067\u6C7A\u307E\u308B\uFF09"
+      )
+    ]
   };
 };
-function publicIpv4(env2, description) {
+function publicIpv4(env2) {
   return {
     serviceCode: "AmazonVPC",
     usageType: `${env2.px("use1")}PublicIPv4:InUseAddress`,
     operation: "",
-    amount: HOURS_PER_MONTH,
-    description: `${description} (${HOURS_PER_MONTH} h)`
+    amount: H,
+    description: msg(`public IPv4 address (${H} h)`, `\u30D1\u30D6\u30EA\u30C3\u30AF IPv4 \u30A2\u30C9\u30EC\u30B9\uFF08${H} \u6642\u9593\uFF09`)
   };
 }
 var eip = (_attrs, _unknown, _prefix, env2) => ({
-  lines: [publicIpv4(env2, "public IPv4 address")],
+  lines: [publicIpv4(env2)],
   partial: [],
   excluded: []
 });
@@ -56200,30 +56356,39 @@ function listLength(attrs, unknown, key) {
   const v = attrs[key];
   return Array.isArray(v) ? v.length : void 0;
 }
+var ENDPOINT_NAMES_JA = {
+  Interface: "\u30A4\u30F3\u30BF\u30FC\u30D5\u30A7\u30A4\u30B9\u578B\u30A8\u30F3\u30C9\u30DD\u30A4\u30F3\u30C8",
+  GatewayLoadBalancer: "Gateway Load Balancer \u578B\u30A8\u30F3\u30C9\u30DD\u30A4\u30F3\u30C8"
+};
 var vpcEndpoint = (attrs, unknown, _prefix, env2) => {
   if (isUnknown(unknown, "vpc_endpoint_type")) {
-    return unestimable("endpoint type is not known until apply");
+    return unestimable(unknownUntilApply(W.endpointType));
   }
   const type = str(attrs, "vpc_endpoint_type") ?? "Gateway";
   if (type === "Gateway") {
     return { lines: [], partial: [], excluded: [] };
   }
   const usageType = type === "Interface" ? "VpcEndpoint-Hours" : type === "GatewayLoadBalancer" ? "VpcEndpoint-GWLBE-Hours" : void 0;
-  if (usageType === void 0) return unestimable(`endpoint type "${type}" is not supported`);
+  if (usageType === void 0) return unestimable(notSupported(W.endpointType, type));
   const subnets = listLength(attrs, unknown, "subnet_ids");
-  if (subnets === void 0) return unestimable("number of subnets is not known until apply");
+  if (subnets === void 0) return unestimable(unknownUntilApply(W.subnets));
   return {
     lines: [
       {
         serviceCode: "AmazonVPC",
         usageType: `${env2.px("use1")}${usageType}`,
         operation: "VpcEndpoint",
-        amount: HOURS_PER_MONTH * subnets,
-        description: `${type} endpoint in ${subnets} subnet${subnets === 1 ? "" : "s"} (${HOURS_PER_MONTH} h each)`
+        amount: H * subnets,
+        description: msg(
+          `${type} endpoint in ${subnets} subnet${subnets === 1 ? "" : "s"} (${H} h each)`,
+          `${ENDPOINT_NAMES_JA[type] ?? type}\u3001\u30B5\u30D6\u30CD\u30C3\u30C8 ${subnets} \u500B\uFF08\u5404 ${H} \u6642\u9593\uFF09`
+        )
       }
     ],
     partial: [],
-    excluded: ["VPC endpoint data processing (per GB)"]
+    excluded: [
+      msg("VPC endpoint data processing (per GB)", "VPC \u30A8\u30F3\u30C9\u30DD\u30A4\u30F3\u30C8\u306E\u30C7\u30FC\u30BF\u51E6\u7406\uFF08GB \u5358\u4F4D\uFF09")
+    ]
   };
 };
 var CACHE_ENGINES = {
@@ -56234,35 +56399,45 @@ var CACHE_ENGINES = {
 function cacheNodes(engine, nodeType, nodes5, prefix) {
   const e5 = engine ?? "redis";
   const operation2 = CACHE_ENGINES[e5];
-  if (operation2 === void 0) return unestimable(`engine "${e5}" is not supported`);
-  if (nodeType === void 0) return unestimable("node type is not known until apply");
+  if (operation2 === void 0) return unestimable(notSupported(W.engine, e5));
+  if (nodeType === void 0) return unestimable(unknownUntilApply(W.nodeType));
   return {
     lines: [
       {
         serviceCode: "AmazonElastiCache",
         usageType: `${prefix}NodeUsage:${nodeType}`,
         operation: operation2,
-        amount: HOURS_PER_MONTH * nodes5,
-        description: `${nodes5} \xD7 ${nodeType} ${e5} (${HOURS_PER_MONTH} h each)`
+        amount: H * nodes5,
+        description: msg(
+          `${nodes5} \xD7 ${nodeType} ${e5} (${H} h each)`,
+          `${nodeType} ${e5} \xD7 ${nodes5}\uFF08\u5404 ${H} \u6642\u9593\uFF09`
+        )
       }
     ],
     partial: [],
-    excluded: ["ElastiCache backup storage beyond the free allowance", "data transfer"]
+    excluded: [
+      msg(
+        "ElastiCache backup storage beyond the free allowance",
+        "\u7121\u6599\u67A0\u3092\u8D85\u3048\u308B ElastiCache \u306E\u30D0\u30C3\u30AF\u30A2\u30C3\u30D7\u30B9\u30C8\u30EC\u30FC\u30B8"
+      ),
+      DATA_TRANSFER
+    ]
   };
 }
 var elasticacheCluster = (attrs, unknown, prefix, env2) => {
   const group4 = readSet(str, attrs, unknown, "replication_group_id", env2);
-  if (group4 === "unknown") {
-    return unestimable("replication group membership is not known until apply");
-  }
+  if (group4 === "unknown") return unestimable(unknownUntilApply(W.membership));
   if (group4 !== void 0) {
     return unestimable(
-      `read replica added to replication group ${group4}; its node type comes from the group`
+      msg(
+        `read replica added to replication group ${group4}; its node type comes from the group`,
+        `\u30EC\u30D7\u30EA\u30B1\u30FC\u30B7\u30E7\u30F3\u30B0\u30EB\u30FC\u30D7 ${group4} \u306B\u8DB3\u3059\u30EA\u30FC\u30C9\u30EC\u30D7\u30EA\u30AB\u3067\u3001\u30CE\u30FC\u30C9\u30BF\u30A4\u30D7\u306F\u30B0\u30EB\u30FC\u30D7\u3067\u6C7A\u307E\u308B`
+      )
     );
   }
-  if (isUnknown(unknown, "engine")) return unestimable("engine is not known until apply");
+  if (isUnknown(unknown, "engine")) return unestimable(unknownUntilApply(W.engine));
   const nodes5 = read(num, attrs, unknown, "num_cache_nodes");
-  if (nodes5 === "unknown") return unestimable("number of nodes is not known until apply");
+  if (nodes5 === "unknown") return unestimable(unknownUntilApply(W.nodes));
   return cacheNodes(
     str(attrs, "engine"),
     isUnknown(unknown, "node_type") ? void 0 : str(attrs, "node_type"),
@@ -56272,7 +56447,7 @@ var elasticacheCluster = (attrs, unknown, prefix, env2) => {
 };
 var elasticacheReplicationGroup = (attrs, unknown, prefix, env2) => {
   if (readSet(str, attrs, unknown, "engine", env2) === "unknown") {
-    return unestimable("engine is not known until apply");
+    return unestimable(unknownUntilApply(W.engine));
   }
   const shards = readSet(num, attrs, unknown, "num_node_groups", env2);
   const replicas = readSet(num, attrs, unknown, "replicas_per_node_group", env2);
@@ -56288,7 +56463,7 @@ var elasticacheReplicationGroup = (attrs, unknown, prefix, env2) => {
   } else if (typeof shards === "number" && typeof replicas === "number") {
     nodes5 = shards * (replicas + 1);
   }
-  if (nodes5 === void 0) return unestimable("number of nodes is not known until apply");
+  if (nodes5 === void 0) return unestimable(unknownUntilApply(W.nodes));
   return cacheNodes(
     str(attrs, "engine"),
     isUnknown(unknown, "node_type") ? void 0 : str(attrs, "node_type"),
@@ -56301,48 +56476,62 @@ var AURORA_ENGINES = {
   "aurora-postgresql": "CreateDBInstance:0021"
 };
 var AURORA_USAGE_EXCLUDED = [
-  "Aurora storage and I/O (depend on usage)",
-  "Aurora backup storage beyond the free allowance"
+  msg("Aurora storage and I/O (depend on usage)", "Aurora \u306E\u30B9\u30C8\u30EC\u30FC\u30B8\u3068 I/O\uFF08\u4F7F\u7528\u91CF\u3067\u6C7A\u307E\u308B\uFF09"),
+  msg(
+    "Aurora backup storage beyond the free allowance",
+    "\u7121\u6599\u67A0\u3092\u8D85\u3048\u308B Aurora \u306E\u30D0\u30C3\u30AF\u30A2\u30C3\u30D7\u30B9\u30C8\u30EC\u30FC\u30B8"
+  )
 ];
 var rdsCluster = (attrs, unknown) => {
   const engine = str(attrs, "engine");
-  if (isUnknown(unknown, "engine")) return unestimable("engine is not known until apply");
+  if (isUnknown(unknown, "engine")) return unestimable(unknownUntilApply(W.engine));
   if (engine !== void 0 && !engine.startsWith("aurora") || str(attrs, "db_cluster_instance_class") !== void 0 || isUnknown(unknown, "db_cluster_instance_class")) {
-    return unestimable("Multi-AZ DB clusters are not supported");
+    return unestimable(
+      msg("Multi-AZ DB clusters are not supported", "\u30DE\u30EB\u30C1 AZ DB \u30AF\u30E9\u30B9\u30BF\u30FC\u306B\u306F\u5BFE\u5FDC\u3057\u3066\u3044\u306A\u3044")
+    );
   }
   const mode = str(attrs, "engine_mode");
   if (mode !== void 0 && mode !== "provisioned") {
-    return unestimable(`engine mode "${mode}" is not supported`);
+    return unestimable(notSupported(W.engineMode, mode));
   }
   return { lines: [], partial: [], excluded: AURORA_USAGE_EXCLUDED };
 };
 var rdsClusterInstance = (attrs, unknown, prefix, env2) => {
   const engine = str(attrs, "engine");
   if (engine === void 0 || isUnknown(unknown, "engine")) {
-    return unestimable("engine is not known until apply");
+    return unestimable(unknownUntilApply(W.engine));
   }
   const operation2 = AURORA_ENGINES[engine];
-  if (operation2 === void 0) return unestimable(`engine "${engine}" is not supported`);
+  if (operation2 === void 0) return unestimable(notSupported(W.engine, engine));
   const cls = str(attrs, "instance_class");
   if (cls === void 0 || isUnknown(unknown, "instance_class")) {
-    return unestimable("instance class is not known until apply");
+    return unestimable(unknownUntilApply(W.instanceClass));
   }
   if (cls === "db.serverless") {
-    return unestimable("Aurora Serverless v2 is billed by the capacity it uses");
+    return unestimable(
+      msg(
+        "Aurora Serverless v2 is billed by the capacity it uses",
+        "Aurora Serverless v2 \u306F\u4F7F\u3063\u305F\u5BB9\u91CF\u3067\u8AB2\u91D1\u3055\u308C\u308B"
+      )
+    );
   }
   const storage = env2.context.auroraStorageType;
   const ioOptimized = storage === "aurora-iopt1";
   const partial = storage === void 0 ? [
-    "storage type of the cluster could not be read; priced as Aurora Standard (I/O-Optimized costs more per hour)"
+    msg(
+      "storage type of the cluster could not be read; priced as Aurora Standard (I/O-Optimized costs more per hour)",
+      "\u30AF\u30E9\u30B9\u30BF\u30FC\u306E\u30B9\u30C8\u30EC\u30FC\u30B8\u306E\u7A2E\u985E\u3092\u8AAD\u3081\u306A\u3044\u305F\u3081 Aurora Standard \u306E\u5358\u4FA1\u3067\u8A66\u7B97\u3057\u305F\uFF08I/O-Optimized \u306A\u3089\u6642\u9593\u5358\u4FA1\u304C\u9AD8\u3044\uFF09"
+    )
   ] : [];
+  const io = ioOptimized ? " I/O-Optimized" : "";
   return {
     lines: [
       {
         serviceCode: "AmazonRDS",
         usageType: `${prefix}${ioOptimized ? "InstanceUsageIOOptimized" : "InstanceUsage"}:${cls}`,
         operation: operation2,
-        amount: HOURS_PER_MONTH,
-        description: `${cls} ${engine}${ioOptimized ? " I/O-Optimized" : ""} (${HOURS_PER_MONTH} h)`
+        amount: H,
+        description: msg(`${cls} ${engine}${io} (${H} h)`, `${cls} ${engine}${io}\uFF08${H} \u6642\u9593\uFF09`)
       }
     ],
     partial,
@@ -56355,14 +56544,20 @@ var eksCluster = (_attrs, _unknown, _prefix, env2) => ({
       serviceCode: "AmazonEKS",
       usageType: `${env2.px("use1")}AmazonEKS-Hours:perCluster`,
       operation: "CreateOperation",
-      amount: HOURS_PER_MONTH,
-      description: `EKS cluster (${HOURS_PER_MONTH} h)`
+      amount: H,
+      description: msg(`EKS cluster (${H} h)`, `EKS \u30AF\u30E9\u30B9\u30BF\u30FC\uFF08${H} \u6642\u9593\uFF09`)
     }
   ],
   partial: [],
   excluded: [
-    "EKS extended support surcharge for Kubernetes versions past standard support",
-    "EKS worker nodes (priced as their own resources when they are aws_instance)"
+    msg(
+      "EKS extended support surcharge for Kubernetes versions past standard support",
+      "\u6A19\u6E96\u30B5\u30DD\u30FC\u30C8\u3092\u904E\u304E\u305F Kubernetes \u306E\u30D0\u30FC\u30B8\u30E7\u30F3\u306B\u304B\u304B\u308B EKS \u306E\u5EF6\u9577\u30B5\u30DD\u30FC\u30C8\u6599\u91D1"
+    ),
+    msg(
+      "EKS worker nodes (priced as their own resources when they are aws_instance)",
+      "EKS \u306E\u30EF\u30FC\u30AB\u30FC\u30CE\u30FC\u30C9\uFF08aws_instance \u306A\u3089\u3001\u305D\u306E\u30EA\u30BD\u30FC\u30B9\u3068\u3057\u3066\u8A66\u7B97\u3059\u308B\uFF09"
+    )
   ]
 });
 var OPENSEARCH_STORAGE = {
@@ -56372,16 +56567,27 @@ var OPENSEARCH_STORAGE = {
   standard: "ES:Magnetic-Storage"
 };
 var searchInstance = (type) => type.replace(/\.(search|elasticsearch)$/, "");
+var nodeLine = (count, type, en, ja) => msg(
+  `${count} \xD7 ${type} ${en}${count === 1 ? "" : "s"} (${H} h each)`,
+  `${type} ${ja} \xD7 ${count}\uFF08\u5404 ${H} \u6642\u9593\uFF09`
+);
 var openSearchDomain = (attrs, unknown, prefix, env2) => {
   const cluster = blocks(attrs, "cluster_config")[0] ?? {};
   const cu = blockUnknown(unknown, "cluster_config", 0);
   if (isUnknown(unknown, "cluster_config") || cu.instance_type === true) {
-    return unestimable("instance type is not known until apply");
+    return unestimable(unknownUntilApply(W.instanceType));
   }
   const type = str(cluster, "instance_type");
-  if (type === void 0) return unestimable("instance type is not set in cluster_config");
+  if (type === void 0) {
+    return unestimable(
+      msg(
+        "instance type is not set in cluster_config",
+        "cluster_config \u306B\u30A4\u30F3\u30B9\u30BF\u30F3\u30B9\u30BF\u30A4\u30D7\u304C\u6307\u5B9A\u3055\u308C\u3066\u3044\u306A\u3044"
+      )
+    );
+  }
   const count = cu.instance_count === true ? void 0 : num(cluster, "instance_count") ?? 1;
-  if (count === void 0) return unestimable("number of instances is not known until apply");
+  if (count === void 0) return unestimable(unknownUntilApply(W.instances));
   const line = (usageType, amount, description) => ({
     serviceCode: "AmazonES",
     usageType: prefix + usageType,
@@ -56392,59 +56598,74 @@ var openSearchDomain = (attrs, unknown, prefix, env2) => {
   const lines = [
     line(
       `ESInstance:${searchInstance(type)}`,
-      HOURS_PER_MONTH * count,
-      `${count} \xD7 ${type} data node${count === 1 ? "" : "s"} (${HOURS_PER_MONTH} h each)`
+      H * count,
+      nodeLine(count, type, "data node", "\u30C7\u30FC\u30BF\u30CE\u30FC\u30C9")
     )
   ];
   const partial = [];
   if (cu.dedicated_master_enabled === true) {
-    partial.push("dedicated master nodes are not known until apply");
+    partial.push(unknownUntilApply(W.masters, true));
   } else if (cluster.dedicated_master_enabled === true) {
     const masterType = str(cluster, "dedicated_master_type");
     const masters = num(cluster, "dedicated_master_count");
     if (masterType === void 0 || masters === void 0) {
-      partial.push("dedicated master nodes are not known until apply");
+      partial.push(unknownUntilApply(W.masters, true));
     } else {
       lines.push(
         line(
           `ESInstance:${searchInstance(masterType)}`,
-          HOURS_PER_MONTH * masters,
-          `${masters} \xD7 ${masterType} master node${masters === 1 ? "" : "s"} (${HOURS_PER_MONTH} h each)`
+          H * masters,
+          nodeLine(masters, masterType, "master node", "\u5C02\u7528\u30DE\u30B9\u30BF\u30FC\u30CE\u30FC\u30C9")
         )
       );
     }
   }
-  if (cluster.warm_enabled === true) partial.push("UltraWarm nodes are not supported");
+  if (cluster.warm_enabled === true) {
+    partial.push(msg("UltraWarm nodes are not supported", "UltraWarm \u30CE\u30FC\u30C9\u306B\u306F\u5BFE\u5FDC\u3057\u3066\u3044\u306A\u3044"));
+  }
   const ebs = blocks(attrs, "ebs_options")[0];
   const eu = blockUnknown(unknown, "ebs_options", 0);
   const ebsOptionsUnknown = isUnknown(unknown, "ebs_options");
   const ebsUnknown = eu.ebs_enabled === true || ebsOptionsUnknown && env2.context.configured?.has("ebs_options") !== false;
-  const excluded = ["OpenSearch snapshots and data transfer"];
+  const excluded = [
+    msg("OpenSearch snapshots and data transfer", "OpenSearch \u306E\u30B9\u30CA\u30C3\u30D7\u30B7\u30E7\u30C3\u30C8\u3068\u30C7\u30FC\u30BF\u8EE2\u9001")
+  ];
   if (ebsOptionsUnknown && !ebsUnknown) {
-    excluded.push("OpenSearch EBS storage written as a dynamic ebs_options block");
+    excluded.push(
+      msg(
+        "OpenSearch EBS storage written as a dynamic ebs_options block",
+        "dynamic \u30D6\u30ED\u30C3\u30AF\u3067\u66F8\u3044\u305F ebs_options \u306E OpenSearch \u306E EBS \u30B9\u30C8\u30EC\u30FC\u30B8"
+      )
+    );
   }
   if (ebsUnknown) {
-    partial.push("EBS storage is not known until apply");
+    partial.push(unknownUntilApply(W.ebsStorage));
   } else if (ebs !== void 0 && ebs.ebs_enabled === true) {
     const volumeType = eu.volume_type === true ? void 0 : str(ebs, "volume_type") ?? "gp2";
     const size = eu.volume_size === true ? void 0 : num(ebs, "volume_size");
     const storage = volumeType === void 0 ? void 0 : OPENSEARCH_STORAGE[volumeType];
     if (size === void 0 || volumeType === void 0) {
-      partial.push("EBS storage is not known until apply");
+      partial.push(unknownUntilApply(W.ebsStorage));
     } else if (storage === void 0) {
-      partial.push(`${volumeType} storage is not supported`);
+      partial.push(notSupported(W.storageType, volumeType));
     } else {
-      lines.push(line(storage, size * count, `${volumeType} storage ${size} GB \xD7 ${count}`));
+      lines.push(line(storage, size * count, storageLine(volumeType, size, ` \xD7 ${count}`)));
       const iops = num(ebs, "iops");
       if (volumeType === "io1") {
-        if (eu.iops === true) partial.push("provisioned IOPS is not known until apply");
+        if (eu.iops === true) partial.push(unknownUntilApply(W.piops));
         else if (iops !== void 0 && iops > 0) {
-          lines.push(line("ES:PIOPS", iops * count, `${iops} provisioned IOPS \xD7 ${count}`));
+          lines.push(
+            line(
+              "ES:PIOPS",
+              iops * count,
+              msg(`${iops} provisioned IOPS \xD7 ${count}`, `\u30D7\u30ED\u30D3\u30B8\u30E7\u30F3\u30C9 IOPS ${iops} \xD7 ${count}`)
+            )
+          );
         }
       }
       const throughput = num(ebs, "throughput");
       if (volumeType === "gp3" && ((iops ?? 0) > 3e3 || (throughput ?? 0) > 125)) {
-        partial.push("gp3 IOPS and throughput above the baseline are not supported");
+        partial.push(GP3_ABOVE_BASELINE);
       }
     }
   }
@@ -56472,9 +56693,143 @@ function isAwsType(type) {
 }
 function estimateUsage(type, attrs, unknown, region, context3 = {}) {
   const estimator = ESTIMATORS[type];
-  if (estimator === void 0) return unestimable(`resource type ${type} is not supported`);
+  if (estimator === void 0) {
+    return unestimable(
+      msg(`resource type ${type} is not supported`, `\u30EA\u30BD\u30FC\u30B9\u306E\u7A2E\u985E ${type} \u306B\u306F\u5BFE\u5FDC\u3057\u3066\u3044\u306A\u3044`)
+    );
+  }
   const env2 = { region, context: context3, px: (style) => usageTypePrefix(region, style) };
   return estimator(attrs, unknown, usageTypePrefix(region), env2);
+}
+
+// src/estimate.ts
+function toAction(actions) {
+  if (actions.includes("create") && actions.includes("delete")) return "replace";
+  if (actions.includes("create")) return "create";
+  if (actions.includes("delete")) return "delete";
+  if (actions.includes("update")) return "update";
+  return void 0;
+}
+function uniqueMsgs(items) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const m3 of items) {
+    if (seen.has(m3.en)) continue;
+    seen.add(m3.en);
+    out.push(m3);
+  }
+  return out;
+}
+var round = (n3) => Math.round(n3 * 1e4) / 1e4;
+async function estimatePlan(plan, region, pricer) {
+  const pending = [];
+  const notEstimated = [];
+  let otherProviderCount = 0;
+  for (const rc of plan.resource_changes ?? []) {
+    if (rc.mode !== void 0 && rc.mode !== "managed") continue;
+    const action = toAction(rc.change.actions);
+    if (action === void 0) continue;
+    if (!isAwsType(rc.type)) {
+      otherProviderCount += 1;
+      continue;
+    }
+    const config = configResource(plan.configuration?.root_module, rc.address);
+    const context3 = {
+      configured: config === void 0 ? void 0 : new Set(Object.keys(config.expressions ?? {})),
+      auroraStorageType: rc.type === "aws_rds_cluster_instance" ? auroraStorageType(rc, plan.resource_changes ?? [], plan.configuration?.root_module) : void 0
+    };
+    const sides = {
+      before: action === "create" ? void 0 : estimateUsage(rc.type, rc.change.before ?? {}, {}, region, context3),
+      after: action === "delete" ? void 0 : estimateUsage(
+        rc.type,
+        rc.change.after ?? {},
+        rc.change.after_unknown ?? {},
+        region,
+        context3
+      )
+    };
+    const reason = sides.after?.unestimable ?? sides.before?.unestimable;
+    if (reason !== void 0) {
+      notEstimated.push({ address: rc.address, type: rc.type, action, reason });
+      continue;
+    }
+    pending.push({
+      change: rc,
+      action,
+      before: sides.before?.lines ?? [],
+      after: sides.after?.lines ?? [],
+      excluded: uniqueMsgs([...sides.before?.excluded ?? [], ...sides.after?.excluded ?? []]),
+      partial: [
+        ...(sides.before?.partial ?? []).map(
+          (x) => msg(`before the change: ${x.en}`, `\u5909\u66F4\u524D: ${x.ja}`)
+        ),
+        ...sides.after?.partial ?? []
+      ]
+    });
+  }
+  const allLines = pending.flatMap((p3) => [...p3.before, ...p3.after]);
+  const { prices } = await pricer(allLines);
+  const resources = [];
+  let offset = 0;
+  for (const p3 of pending) {
+    const take2 = (n3) => {
+      const slice = prices.slice(offset, offset + n3);
+      offset += n3;
+      return slice;
+    };
+    const before = take2(p3.before.length);
+    const after = take2(p3.after.length);
+    const failed = [...before, ...after].find((x) => x.cost === void 0);
+    if (failed !== void 0) {
+      notEstimated.push({
+        address: p3.change.address,
+        type: p3.change.type,
+        action: p3.action,
+        reason: msg(
+          `AWS could not price ${failed.line.usageType} / ${failed.line.operation} (${failed.error})`,
+          `AWS \u304C ${failed.line.usageType} / ${failed.line.operation} \u306E\u6599\u91D1\u3092\u8FD4\u3055\u306A\u304B\u3063\u305F\uFF08${failed.error}\uFF09`
+        )
+      });
+      continue;
+    }
+    const sum = (xs) => round(xs.reduce((s2, x) => s2 + (x.cost ?? 0), 0));
+    const b5 = sum(before);
+    const a5 = sum(after);
+    const shown = p3.action === "delete" ? before : after;
+    resources.push({
+      address: p3.change.address,
+      type: p3.change.type,
+      action: p3.action,
+      before: b5,
+      after: a5,
+      delta: round(a5 - b5),
+      lines: shown.map((x) => ({ ...x.line, cost: x.cost ?? 0 })),
+      excluded: p3.excluded,
+      partial: p3.partial
+    });
+  }
+  resources.sort((x, y) => y.delta - x.delta);
+  const totalBefore = round(resources.reduce((s2, r5) => s2 + r5.before, 0));
+  const totalAfter = round(resources.reduce((s2, r5) => s2 + r5.after, 0));
+  return {
+    resources,
+    notEstimated,
+    otherProviderCount,
+    totalBefore,
+    totalAfter,
+    totalDelta: round(totalAfter - totalBefore)
+  };
+}
+function detectRegion(plan) {
+  const config = plan.configuration?.provider_config?.aws;
+  const region = config?.expressions?.region;
+  if (typeof region?.constant_value === "string") return region.constant_value;
+  const ref = region?.references?.find((r5) => r5.startsWith("var."));
+  if (ref !== void 0) {
+    const value = plan.variables?.[ref.slice("var.".length)]?.value;
+    if (typeof value === "string") return value;
+  }
+  return void 0;
 }
 
 // src/comment.ts
@@ -56535,7 +56890,7 @@ var EN = {
   gapTitle: (n3) => `#### \u26A0\uFE0F Not estimated (${n3})`,
   gapColumns: ["Resource", "Action", "What is missing"],
   leftOutTitle: "What the estimate leaves out",
-  leftOutIntro: "Usage-based charges the plan cannot tell:",
+  leftOutIntro: "Not priced (mostly charges that depend on usage, which a plan cannot tell):",
   otherProviders: (n3) => `${n3} changed resource${n3 === 1 ? "" : "s"} of non-AWS providers (such as random or null), not priced.`,
   assumptionsIntro: "Assumptions:",
   assumptions: (ctx) => [
@@ -56572,7 +56927,7 @@ var JA = {
   gapTitle: (n3) => `#### \u26A0\uFE0F \u8A66\u7B97\u3067\u304D\u306A\u304B\u3063\u305F\u3082\u306E\uFF08${n3} \u4EF6\uFF09`,
   gapColumns: ["\u30EA\u30BD\u30FC\u30B9", "\u64CD\u4F5C", "\u8A66\u7B97\u3067\u304D\u306A\u304B\u3063\u305F\u3082\u306E"],
   leftOutTitle: "\u8A66\u7B97\u306B\u542B\u307E\u308C\u306A\u3044\u3082\u306E",
-  leftOutIntro: "plan \u304B\u3089\u306F\u5206\u304B\u3089\u306A\u3044\u3001\u4F7F\u7528\u91CF\u3067\u6C7A\u307E\u308B\u6599\u91D1:",
+  leftOutIntro: "\u8A66\u7B97\u306B\u542B\u3081\u3066\u3044\u306A\u3044\u3082\u306E\uFF08\u591A\u304F\u306F\u4F7F\u7528\u91CF\u3067\u6C7A\u307E\u308A\u3001plan \u304B\u3089\u306F\u5206\u304B\u3089\u306A\u3044\u6599\u91D1\uFF09:",
   otherProviders: (n3) => `AWS \u4EE5\u5916\u306E\u30D7\u30ED\u30D0\u30A4\u30C0\u30FC\uFF08\u4F8B: random\u3001null\uFF09\u306E\u30EA\u30BD\u30FC\u30B9 ${n3} \u4EF6\u306F\u8A66\u7B97\u3057\u3066\u3044\u307E\u305B\u3093\u3002`,
   assumptionsIntro: "\u8A66\u7B97\u306E\u524D\u63D0:",
   assumptions: (ctx) => [
@@ -56621,7 +56976,7 @@ function renderComment(estimate, expected, ctx) {
       "",
       ...priced.flatMap((r5) => [
         `- \`${cell(r5.address)}\``,
-        ...r5.lines.map((l3) => `  - ${cell(l3.description)}: ${money(l3.cost)}`)
+        ...r5.lines.map((l3) => `  - ${cell(l3.description[ctx.language])}: ${money(l3.cost)}`)
       ]),
       "",
       "</details>"
@@ -56637,11 +56992,13 @@ function renderComment(estimate, expected, ctx) {
       `| ${m3.gapColumns.join(" | ")} |`,
       "|---|---|---|",
       ...missing.map(
-        (g5) => `| \`${cell(g5.address)}\` | ${m3.actions[g5.action]} | ${cell(g5.reason)} |`
+        (g5) => `| \`${cell(g5.address)}\` | ${m3.actions[g5.action]} | ${cell(g5.reason[ctx.language])} |`
       )
     );
   }
-  const leftOut = [...new Set(estimate.resources.flatMap((r5) => r5.excluded))];
+  const leftOut = uniqueMsgs(estimate.resources.flatMap((r5) => r5.excluded)).map(
+    (x) => x[ctx.language]
+  );
   out.push("", `<details><summary>${m3.leftOutTitle}</summary>`, "");
   if (leftOut.length > 0) out.push(m3.leftOutIntro, "", ...leftOut.map((x) => `- ${x}`), "");
   if (estimate.otherProviderCount > 0) out.push(m3.otherProviders(estimate.otherProviderCount), "");
@@ -56649,180 +57006,6 @@ function renderComment(estimate, expected, ctx) {
   if (expected === void 0) out.push("", `<sub>${m3.howToDeclare}</sub>`);
   return `${out.join("\n")}
 `;
-}
-
-// src/plan-config.ts
-function splitAddress(address) {
-  const parts = address.match(/(?:[^.["]+|\[[^\]]*\]|"[^"]*")+/g) ?? [];
-  const modules = [];
-  let i5 = 0;
-  while (parts[i5] === "module" && parts[i5 + 1] !== void 0) {
-    modules.push((parts[i5 + 1] ?? "").replace(/\[.*\]$/, ""));
-    i5 += 2;
-  }
-  const local = parts.slice(i5).join(".").replace(/\[[^\]]*\]$/, "");
-  return { modules, local };
-}
-function configResource(root5, address) {
-  const { modules, local } = splitAddress(address);
-  let mod = root5;
-  for (const name of modules) mod = mod?.module_calls?.[name]?.module;
-  return mod?.resources?.find((r5) => r5.address === local);
-}
-function expression(block, key) {
-  const e5 = block?.expressions?.[key];
-  return typeof e5 === "object" && e5 !== null ? e5 : void 0;
-}
-function clusterStorage(cluster, root5) {
-  const after = cluster.change.after ?? cluster.change.before ?? {};
-  const unknown = cluster.change.after_unknown ?? {};
-  if (unknown.storage_type !== true) {
-    const v = after.storage_type;
-    if (v === void 0 || v === null || v === "" || v === "aurora") return "aurora";
-    return typeof v === "string" ? v : void 0;
-  }
-  const config = configResource(root5, cluster.address);
-  if (config === void 0) return void 0;
-  const e5 = expression(config, "storage_type");
-  if (e5 === void 0) return "aurora";
-  return typeof e5.constant_value === "string" ? e5.constant_value || "aurora" : void 0;
-}
-function auroraStorageType(instance2, changes, root5) {
-  const clusters = changes.filter((c5) => c5.type === "aws_rds_cluster");
-  const attrs = instance2.change.after ?? instance2.change.before ?? {};
-  const id = attrs.cluster_identifier;
-  if (typeof id === "string" && id !== "") {
-    const match = clusters.find(
-      (c5) => (c5.change.after ?? c5.change.before)?.cluster_identifier === id
-    );
-    return match === void 0 ? void 0 : clusterStorage(match, root5);
-  }
-  const refs = expression(configResource(root5, instance2.address), "cluster_identifier")?.references;
-  const ref = refs?.find((r5) => r5.startsWith("aws_rds_cluster."));
-  if (ref === void 0) return void 0;
-  const target = ref.split(".").slice(0, 2).join(".").replace(/\[.*$/, "");
-  const { modules } = splitAddress(instance2.address);
-  const candidates = clusters.filter((c5) => {
-    const s2 = splitAddress(c5.address);
-    return s2.local === target && s2.modules.join(".") === modules.join(".");
-  });
-  const types = new Set(candidates.map((c5) => clusterStorage(c5, root5)));
-  return types.size === 1 ? [...types][0] : void 0;
-}
-
-// src/estimate.ts
-function toAction(actions) {
-  if (actions.includes("create") && actions.includes("delete")) return "replace";
-  if (actions.includes("create")) return "create";
-  if (actions.includes("delete")) return "delete";
-  if (actions.includes("update")) return "update";
-  return void 0;
-}
-var round = (n3) => Math.round(n3 * 1e4) / 1e4;
-async function estimatePlan(plan, region, pricer) {
-  const pending = [];
-  const notEstimated = [];
-  let otherProviderCount = 0;
-  for (const rc of plan.resource_changes ?? []) {
-    if (rc.mode !== void 0 && rc.mode !== "managed") continue;
-    const action = toAction(rc.change.actions);
-    if (action === void 0) continue;
-    if (!isAwsType(rc.type)) {
-      otherProviderCount += 1;
-      continue;
-    }
-    const config = configResource(plan.configuration?.root_module, rc.address);
-    const context3 = {
-      configured: config === void 0 ? void 0 : new Set(Object.keys(config.expressions ?? {})),
-      auroraStorageType: rc.type === "aws_rds_cluster_instance" ? auroraStorageType(rc, plan.resource_changes ?? [], plan.configuration?.root_module) : void 0
-    };
-    const sides = {
-      before: action === "create" ? void 0 : estimateUsage(rc.type, rc.change.before ?? {}, {}, region, context3),
-      after: action === "delete" ? void 0 : estimateUsage(
-        rc.type,
-        rc.change.after ?? {},
-        rc.change.after_unknown ?? {},
-        region,
-        context3
-      )
-    };
-    const reason = sides.after?.unestimable ?? sides.before?.unestimable;
-    if (reason !== void 0) {
-      notEstimated.push({ address: rc.address, type: rc.type, action, reason });
-      continue;
-    }
-    pending.push({
-      change: rc,
-      action,
-      before: sides.before?.lines ?? [],
-      after: sides.after?.lines ?? [],
-      excluded: [.../* @__PURE__ */ new Set([...sides.before?.excluded ?? [], ...sides.after?.excluded ?? []])],
-      partial: [
-        ...(sides.before?.partial ?? []).map((x) => `before the change: ${x}`),
-        ...sides.after?.partial ?? []
-      ]
-    });
-  }
-  const allLines = pending.flatMap((p3) => [...p3.before, ...p3.after]);
-  const { prices } = await pricer(allLines);
-  const resources = [];
-  let offset = 0;
-  for (const p3 of pending) {
-    const take2 = (n3) => {
-      const slice = prices.slice(offset, offset + n3);
-      offset += n3;
-      return slice;
-    };
-    const before = take2(p3.before.length);
-    const after = take2(p3.after.length);
-    const failed = [...before, ...after].find((x) => x.cost === void 0);
-    if (failed !== void 0) {
-      notEstimated.push({
-        address: p3.change.address,
-        type: p3.change.type,
-        action: p3.action,
-        reason: `AWS could not price ${failed.line.usageType} / ${failed.line.operation} (${failed.error})`
-      });
-      continue;
-    }
-    const sum = (xs) => round(xs.reduce((s2, x) => s2 + (x.cost ?? 0), 0));
-    const b5 = sum(before);
-    const a5 = sum(after);
-    const shown = p3.action === "delete" ? before : after;
-    resources.push({
-      address: p3.change.address,
-      type: p3.change.type,
-      action: p3.action,
-      before: b5,
-      after: a5,
-      delta: round(a5 - b5),
-      lines: shown.map((x) => ({ ...x.line, cost: x.cost ?? 0 })),
-      excluded: p3.excluded,
-      partial: p3.partial
-    });
-  }
-  resources.sort((x, y) => y.delta - x.delta);
-  const totalBefore = round(resources.reduce((s2, r5) => s2 + r5.before, 0));
-  const totalAfter = round(resources.reduce((s2, r5) => s2 + r5.after, 0));
-  return {
-    resources,
-    notEstimated,
-    otherProviderCount,
-    totalBefore,
-    totalAfter,
-    totalDelta: round(totalAfter - totalBefore)
-  };
-}
-function detectRegion(plan) {
-  const config = plan.configuration?.provider_config?.aws;
-  const region = config?.expressions?.region;
-  if (typeof region?.constant_value === "string") return region.constant_value;
-  const ref = region?.references?.find((r5) => r5.startsWith("var."));
-  if (ref !== void 0) {
-    const value = plan.variables?.[ref.slice("var.".length)]?.value;
-    if (typeof value === "string") return value;
-  }
-  return void 0;
 }
 
 // src/run.ts

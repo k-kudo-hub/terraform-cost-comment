@@ -1,7 +1,7 @@
 import { auroraStorageType, type ConfigModule, configResource } from "./plan-config.js";
 import type { Pricer } from "./pricing.js";
 import { estimateUsage, isAwsType, type UsageContext } from "./resources.js";
-import type { Attributes, UsageLine } from "./types.js";
+import { type Attributes, type Msg, msg, type UsageLine } from "./types.js";
 
 /** The parts of `terraform show -json <planfile>` this action reads. */
 export interface TerraformPlan {
@@ -44,16 +44,16 @@ export interface ResourceEstimate {
   delta: number;
   /** Usage lines priced after the change (or before, for deletions). */
   lines: Array<UsageLine & { cost: number }>;
-  excluded: string[];
+  excluded: Msg[];
   /** Parts that would cost money but could not be priced, before or after the change. */
-  partial: string[];
+  partial: Msg[];
 }
 
 export interface NotEstimated {
   address: string;
   type: string;
   action: Action;
-  reason: string;
+  reason: Msg;
 }
 
 export interface PlanEstimate {
@@ -80,8 +80,20 @@ interface Pending {
   action: Action;
   before: UsageLine[];
   after: UsageLine[];
-  excluded: string[];
-  partial: string[];
+  excluded: Msg[];
+  partial: Msg[];
+}
+
+/** Removes duplicate texts, keeping the first of each. */
+export function uniqueMsgs(items: readonly Msg[]): Msg[] {
+  const seen = new Set<string>();
+  const out: Msg[] = [];
+  for (const m of items) {
+    if (seen.has(m.en)) continue;
+    seen.add(m.en);
+    out.push(m);
+  }
+  return out;
 }
 
 /** Round to a hundredth of a cent so float noise does not show up as a change. */
@@ -142,9 +154,11 @@ export async function estimatePlan(
       action,
       before: sides.before?.lines ?? [],
       after: sides.after?.lines ?? [],
-      excluded: [...new Set([...(sides.before?.excluded ?? []), ...(sides.after?.excluded ?? [])])],
+      excluded: uniqueMsgs([...(sides.before?.excluded ?? []), ...(sides.after?.excluded ?? [])]),
       partial: [
-        ...(sides.before?.partial ?? []).map((x) => `before the change: ${x}`),
+        ...(sides.before?.partial ?? []).map((x) =>
+          msg(`before the change: ${x.en}`, `変更前: ${x.ja}`),
+        ),
         ...(sides.after?.partial ?? []),
       ],
     });
@@ -169,7 +183,10 @@ export async function estimatePlan(
         address: p.change.address,
         type: p.change.type,
         action: p.action,
-        reason: `AWS could not price ${failed.line.usageType} / ${failed.line.operation} (${failed.error})`,
+        reason: msg(
+          `AWS could not price ${failed.line.usageType} / ${failed.line.operation} (${failed.error})`,
+          `AWS が ${failed.line.usageType} / ${failed.line.operation} の料金を返さなかった（${failed.error}）`,
+        ),
       });
       continue;
     }

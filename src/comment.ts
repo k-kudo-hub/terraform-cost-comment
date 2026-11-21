@@ -1,7 +1,8 @@
-import type { Action, PlanEstimate } from "./estimate.js";
+import { type Action, type PlanEstimate, uniqueMsgs } from "./estimate.js";
 import { HOURS_PER_MONTH } from "./resources.js";
+import type { Language, Msg } from "./types.js";
 
-export type Language = "en" | "ja";
+export type { Language } from "./types.js";
 
 export interface RenderContext {
   region: string;
@@ -51,7 +52,7 @@ export function isUnexpected(verdict: Verdict): boolean {
 export interface Gap {
   address: string;
   action: Action;
-  reason: string;
+  reason: Msg;
 }
 
 /** Everything left out of the total: whole resources and parts of estimated ones. */
@@ -123,7 +124,7 @@ const EN: Messages = {
   gapTitle: (n) => `#### ⚠️ Not estimated (${n})`,
   gapColumns: ["Resource", "Action", "What is missing"],
   leftOutTitle: "What the estimate leaves out",
-  leftOutIntro: "Usage-based charges the plan cannot tell:",
+  leftOutIntro: "Not priced (mostly charges that depend on usage, which a plan cannot tell):",
   otherProviders: (n) =>
     `${n} changed resource${n === 1 ? "" : "s"} of non-AWS providers (such as random or null), not priced.`,
   assumptionsIntro: "Assumptions:",
@@ -167,7 +168,7 @@ const JA: Messages = {
   gapTitle: (n) => `#### ⚠️ 試算できなかったもの（${n} 件）`,
   gapColumns: ["リソース", "操作", "試算できなかったもの"],
   leftOutTitle: "試算に含まれないもの",
-  leftOutIntro: "plan からは分からない、使用量で決まる料金:",
+  leftOutIntro: "試算に含めていないもの（多くは使用量で決まり、plan からは分からない料金）:",
   otherProviders: (n) =>
     `AWS 以外のプロバイダー（例: random、null）のリソース ${n} 件は試算していません。`,
   assumptionsIntro: "試算の前提:",
@@ -230,7 +231,7 @@ export function renderComment(
       "",
       ...priced.flatMap((r) => [
         `- \`${cell(r.address)}\``,
-        ...r.lines.map((l) => `  - ${cell(l.description)}: ${money(l.cost)}`),
+        ...r.lines.map((l) => `  - ${cell(l.description[ctx.language])}: ${money(l.cost)}`),
       ]),
       "",
       "</details>",
@@ -247,12 +248,15 @@ export function renderComment(
       `| ${m.gapColumns.join(" | ")} |`,
       "|---|---|---|",
       ...missing.map(
-        (g) => `| \`${cell(g.address)}\` | ${m.actions[g.action]} | ${cell(g.reason)} |`,
+        (g) =>
+          `| \`${cell(g.address)}\` | ${m.actions[g.action]} | ${cell(g.reason[ctx.language])} |`,
       ),
     );
   }
 
-  const leftOut = [...new Set(estimate.resources.flatMap((r) => r.excluded))];
+  const leftOut = uniqueMsgs(estimate.resources.flatMap((r) => r.excluded)).map(
+    (x) => x[ctx.language],
+  );
   out.push("", `<details><summary>${m.leftOutTitle}</summary>`, "");
   if (leftOut.length > 0) out.push(m.leftOutIntro, "", ...leftOut.map((x) => `- ${x}`), "");
   if (estimate.otherProviderCount > 0) out.push(m.otherProviders(estimate.otherProviderCount), "");

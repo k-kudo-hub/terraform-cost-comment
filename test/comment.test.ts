@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { judge, parseExpectation, renderComment } from "../src/comment.js";
 import type { PlanEstimate, ResourceEstimate } from "../src/estimate.js";
+import { same } from "./helpers.js";
 
 const resource = (over: Partial<ResourceEstimate>): ResourceEstimate => ({
   address: "aws_nat_gateway.main",
@@ -15,11 +16,11 @@ const resource = (over: Partial<ResourceEstimate>): ResourceEstimate => ({
       usageType: "APN1-NatGateway-Hours",
       operation: "NatGateway",
       amount: 730,
-      description: "NAT gateway (730 h)",
+      description: same("NAT gateway (730 h)"),
       cost: 45.26,
     },
   ],
-  excluded: ["NAT gateway data processing (per GB)"],
+  excluded: [same("NAT gateway data processing (per GB)")],
   partial: [],
   ...over,
 });
@@ -108,7 +109,7 @@ describe("renderComment", () => {
             address: "aws_s3_bucket.logs",
             type: "aws_s3_bucket",
             action: "create",
-            reason: "resource type aws_s3_bucket is not supported",
+            reason: same("resource type aws_s3_bucket is not supported"),
           },
         ],
       }),
@@ -156,7 +157,7 @@ describe("renderComment", () => {
             address: "aws_rds_cluster.main",
             type: "aws_rds_cluster",
             action: "create",
-            reason: "resource type aws_rds_cluster is not supported",
+            reason: same("resource type aws_rds_cluster is not supported"),
           },
         ],
       }),
@@ -171,7 +172,7 @@ describe("renderComment", () => {
   it("does not put a check mark on a within verdict when something is not estimated", () => {
     const body = renderComment(
       estimate({
-        resources: [resource({ partial: ["root volume size is not known until apply"] })],
+        resources: [resource({ partial: [same("root volume size is not known until apply")] })],
       }),
       100,
       { ...ctx, language: "en" },
@@ -185,7 +186,7 @@ describe("renderComment", () => {
         resources: [
           resource({
             address: "aws_db_instance.db",
-            partial: ["io2 storage and its provisioned IOPS are not supported"],
+            partial: [same("io2 storage and its provisioned IOPS are not supported")],
           }),
         ],
       }),

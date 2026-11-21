@@ -1,8 +1,10 @@
 import { type PrefixStyle, usageTypePrefix } from "./regions.js";
-import type { Attributes, UsageLine, UsageResult } from "./types.js";
+import { type Attributes, type Msg, msg, type UsageLine, type UsageResult } from "./types.js";
 
 /** Hours in a month, the figure AWS Pricing Calculator uses. */
 export const HOURS_PER_MONTH = 730;
+
+const H = HOURS_PER_MONTH;
 
 /** Facts from elsewhere in the plan that one resource's price depends on. */
 export interface UsageContext {
@@ -55,12 +57,52 @@ const blockUnknown = (unknown: Attributes, key: string, index: number): Attribut
   return {};
 };
 
-const unestimable = (reason: string): UsageResult => ({
+const unestimable = (reason: Msg): UsageResult => ({
   lines: [],
   excluded: [],
   partial: [],
   unestimable: reason,
 });
+
+// ---------------------------------------------------------------- shared texts
+
+/** "<what> is not known until apply" */
+const unknownUntilApply = (what: Msg, plural = false): Msg =>
+  msg(
+    `${what.en} ${plural ? "are" : "is"} not known until apply`,
+    `${what.ja}が apply まで分からない`,
+  );
+
+/** '<what> "<value>" is not supported' */
+const notSupported = (what: Msg, value: string): Msg =>
+  msg(`${what.en} "${value}" is not supported`, `${what.ja}「${value}」には対応していない`);
+
+const W = {
+  engine: msg("engine", "エンジン"),
+  instanceType: msg("instance type", "インスタンスタイプ"),
+  instanceClass: msg("instance class", "インスタンスクラス"),
+  nodeType: msg("node type", "ノードタイプ"),
+  nodes: msg("number of nodes", "ノード数"),
+  multiAz: msg("Multi-AZ", "マルチ AZ にするか"),
+  storageSize: msg("storage size", "ストレージのサイズ"),
+  storageType: msg("storage type", "ストレージの種類"),
+  piops: msg("provisioned IOPS", "プロビジョンド IOPS"),
+  lbType: msg("load balancer type", "ロードバランサーの種類"),
+  endpointType: msg("endpoint type", "エンドポイントの種類"),
+  subnets: msg("number of subnets", "サブネット数"),
+  instances: msg("number of instances", "インスタンス数"),
+  masters: msg("dedicated master nodes", "専用マスターノード"),
+  ebsStorage: msg("EBS storage", "EBS ストレージ"),
+  tenancy: msg("tenancy", "テナンシー"),
+  engineMode: msg("engine mode", "エンジンモード"),
+  membership: msg("replication group membership", "レプリケーショングループに加わるか"),
+};
+
+const DATA_TRANSFER = msg("data transfer", "データ転送");
+const GP3_ABOVE_BASELINE = msg(
+  "gp3 IOPS and throughput above the baseline are not supported",
+  "基準を超える gp3 の IOPS とスループットには対応していない",
+);
 
 // ---------------------------------------------------------------- EBS
 
@@ -83,15 +125,19 @@ const EBS_TYPES: Readonly<Record<string, EbsVolumeType>> = {
 const GP3_FREE_IOPS = 3000;
 const GP3_FREE_THROUGHPUT_MIBPS = 125;
 /** io2 IOPS price tiers: up to 32,000, 32,001-64,000, above 64,000. */
-const IO2_TIERS: ReadonlyArray<{ suffix: string; size: number }> = [
-  { suffix: "", size: 32000 },
-  { suffix: ".tier2", size: 32000 },
-  { suffix: ".tier3", size: Number.POSITIVE_INFINITY },
+const IO2_TIERS: ReadonlyArray<{ suffix: string; size: number; ja: string }> = [
+  { suffix: "", size: 32000, ja: "" },
+  { suffix: ".tier2", size: 32000, ja: "（第2段階）" },
+  { suffix: ".tier3", size: Number.POSITIVE_INFINITY, ja: "（第3段階）" },
 ];
+
+const VOLUME = msg("volume", "ボリューム");
+const ROOT_VOLUME = msg("root volume", "ルートボリューム");
+const EBS_VOLUME = msg("EBS volume", "EBS ボリューム");
 
 /** One EBS volume's attributes; `undefined` = not set, "unknown" = known only after apply. */
 interface EbsSpec {
-  label: string;
+  label: Msg;
   type: string | undefined | "unknown";
   size: number | undefined | "unknown";
   iops: number | undefined | "unknown";
@@ -105,38 +151,45 @@ interface EbsSpec {
 function ebsLines(
   spec: EbsSpec,
   prefix: string,
-): { lines: UsageLine[]; partial: string[]; unestimable?: string } {
+): { lines: UsageLine[]; partial: Msg[]; unestimable?: Msg } {
   const { label, type, size, iops, throughput } = spec;
+  const of = (en: string, ja: string) => msg(`${label.en} ${en}`, `${label.ja}の${ja}`);
   if (size === undefined || size === "unknown") {
-    return { lines: [], partial: [], unestimable: `${label} size is not known until apply` };
+    return { lines: [], partial: [], unestimable: unknownUntilApply(of("size", "サイズ")) };
   }
   if (type === undefined || type === "unknown") {
-    return { lines: [], partial: [], unestimable: `${label} type is not known until apply` };
+    return { lines: [], partial: [], unestimable: unknownUntilApply(of("type", "種類")) };
   }
   const t = EBS_TYPES[type];
   if (t === undefined) {
-    return { lines: [], partial: [], unestimable: `${label} type "${type}" is not supported` };
+    return { lines: [], partial: [], unestimable: notSupported(of("type", "種類"), type) };
   }
-  const line = (usageType: string, amount: number, description: string): UsageLine => ({
+  const line = (usageType: string, amount: number, description: Msg): UsageLine => ({
     serviceCode: "AmazonEC2",
     usageType: prefix + usageType,
     operation: t.operation,
     amount,
     description,
   });
-  const lines = [line(t.storage, size, `${label} ${type} ${size} GB`)];
-  const partial: string[] = [];
+  const lines = [
+    line(t.storage, size, msg(`${label.en} ${type} ${size} GB`, `${label.ja} ${type} ${size} GB`)),
+  ];
+  const partial: Msg[] = [];
   // gp3 IOPS and throughput left unset are computed at the free baseline, so only io1/io2
   // (where IOPS are always charged) need a value to be priced.
   if ((type === "io1" || type === "io2") && iops === "unknown") {
-    partial.push(`${label} IOPS is not known until apply`);
+    partial.push(unknownUntilApply(of("IOPS", "IOPS")));
   }
   const knownIops = typeof iops === "number" ? iops : undefined;
   const knownThroughput = typeof throughput === "number" ? throughput : undefined;
   if (type === "gp3") {
     if (knownIops !== undefined && knownIops > GP3_FREE_IOPS) {
       lines.push(
-        line("EBS:VolumeP-IOPS.gp3", knownIops - GP3_FREE_IOPS, `${label} IOPS above 3,000`),
+        line(
+          "EBS:VolumeP-IOPS.gp3",
+          knownIops - GP3_FREE_IOPS,
+          of("IOPS above 3,000", "3,000 を超える IOPS"),
+        ),
       );
     }
     if (knownThroughput !== undefined && knownThroughput > GP3_FREE_THROUGHPUT_MIBPS) {
@@ -144,12 +197,18 @@ function ebsLines(
         line(
           "EBS:VolumeP-Throughput.gp3",
           (knownThroughput - GP3_FREE_THROUGHPUT_MIBPS) / 1024,
-          `${label} throughput above 125 MiB/s`,
+          of("throughput above 125 MiB/s", "125 MiB/s を超えるスループット"),
         ),
       );
     }
   } else if (type === "io1" && knownIops !== undefined && knownIops > 0) {
-    lines.push(line("EBS:VolumeP-IOPS.piops", knownIops, `${label} ${knownIops} provisioned IOPS`));
+    lines.push(
+      line(
+        "EBS:VolumeP-IOPS.piops",
+        knownIops,
+        of(`${knownIops} provisioned IOPS`, `プロビジョンド IOPS ${knownIops}`),
+      ),
+    );
   } else if (type === "io2" && knownIops !== undefined && knownIops > 0) {
     let rest = knownIops;
     for (const tier of IO2_TIERS) {
@@ -159,7 +218,7 @@ function ebsLines(
         line(
           `EBS:VolumeP-IOPS.io2${tier.suffix}`,
           amount,
-          `${label} provisioned IOPS${tier.suffix}`,
+          of(`provisioned IOPS${tier.suffix}`, `プロビジョンド IOPS${tier.ja}`),
         ),
       );
       rest -= amount;
@@ -202,7 +261,7 @@ const ebsVolume: Estimator = (attrs, unknown, prefix, env) => {
   const type = readSet(str, attrs, unknown, "type", env);
   const result = ebsLines(
     {
-      label: "volume",
+      label: VOLUME,
       type: type ?? "gp2",
       size: read(num, attrs, unknown, "size"),
       iops: read(num, attrs, unknown, "iops"),
@@ -211,7 +270,11 @@ const ebsVolume: Estimator = (attrs, unknown, prefix, env) => {
     prefix,
   );
   if (result.unestimable !== undefined) return unestimable(result.unestimable);
-  return { lines: result.lines, partial: result.partial, excluded: ["EBS snapshots"] };
+  return {
+    lines: result.lines,
+    partial: result.partial,
+    excluded: [msg("EBS snapshots", "EBS のスナップショット")],
+  };
 };
 
 // ---------------------------------------------------------------- EC2
@@ -219,32 +282,40 @@ const ebsVolume: Estimator = (attrs, unknown, prefix, env) => {
 const instance: Estimator = (attrs, unknown, prefix, env) => {
   const type = str(attrs, "instance_type");
   if (type === undefined || isUnknown(unknown, "instance_type")) {
-    return unestimable("instance type is not known until apply");
+    return unestimable(unknownUntilApply(W.instanceType));
   }
   const tenancy = str(attrs, "tenancy");
   if (tenancy !== undefined && tenancy !== "default") {
-    return unestimable(`tenancy "${tenancy}" is not supported`);
+    return unestimable(notSupported(W.tenancy, tenancy));
   }
   const lines: UsageLine[] = [
     {
       serviceCode: "AmazonEC2",
       usageType: `${prefix}BoxUsage:${type}`,
       operation: "RunInstances",
-      amount: HOURS_PER_MONTH,
-      description: `${type} Linux on-demand (${HOURS_PER_MONTH} h)`,
+      amount: H,
+      description: msg(
+        `${type} Linux on-demand (${H} h)`,
+        `${type} Linux オンデマンド（${H} 時間）`,
+      ),
     },
   ];
-  const partial: string[] = [];
-  const volumes: Array<[string, string]> = [
-    ["root_block_device", "root volume"],
-    ["ebs_block_device", "EBS volume"],
+  const partial: Msg[] = [];
+  const volumes: Array<[string, Msg]> = [
+    ["root_block_device", ROOT_VOLUME],
+    ["ebs_block_device", EBS_VOLUME],
   ];
   for (const [key, label] of volumes) {
     if (isUnknown(unknown, key)) {
       // A root volume always exists; left unconfigured, its size comes from the AMI.
       // ebs_block_device is wholly unknown when none is configured, so there is nothing to price.
-      if (key === "root_block_device")
-        partial.push("root volume size (from the AMI) is not known until apply");
+      if (key === "root_block_device") {
+        partial.push(
+          unknownUntilApply(
+            msg("root volume size (from the AMI)", "ルートボリュームのサイズ（AMI で決まる）"),
+          ),
+        );
+      }
       continue;
     }
     blocks(attrs, key).forEach((block, i) => {
@@ -264,12 +335,20 @@ const instance: Estimator = (attrs, unknown, prefix, env) => {
       if (result.unestimable !== undefined) partial.push(result.unestimable);
     });
   }
+  const excluded = [
+    msg("EC2 operating system licenses other than Linux", "Linux 以外の EC2 の OS ライセンス"),
+    DATA_TRANSFER,
+  ];
   // Only an explicit request: left unset, the subnet decides and the plan cannot tell.
-  const excluded = ["EC2 operating system licenses other than Linux", "data transfer"];
   if (attrs.associate_public_ip_address === true) {
-    lines.push(publicIpv4(env, "public IPv4 address"));
+    lines.push(publicIpv4(env));
   } else if (isUnknown(unknown, "associate_public_ip_address")) {
-    excluded.push("EC2 public IPv4 address when the subnet assigns one");
+    excluded.push(
+      msg(
+        "EC2 public IPv4 address when the subnet assigns one",
+        "サブネットが割り当てる EC2 のパブリック IPv4 アドレス",
+      ),
+    );
   }
   return { lines, partial, excluded };
 };
@@ -307,33 +386,42 @@ const RDS_STORAGE: Readonly<Record<string, RdsStorage>> = {
   },
 };
 
+const storageLine = (type: string, size: number, suffix = ""): Msg =>
+  msg(`${type} storage ${size} GB${suffix}`, `${type} ストレージ ${size} GB${suffix}`);
+
 const dbInstance: Estimator = (attrs, unknown, prefix, env) => {
   const engine = str(attrs, "engine");
   if (engine === undefined || isUnknown(unknown, "engine")) {
-    return unestimable("engine is not known until apply");
+    return unestimable(unknownUntilApply(W.engine));
   }
   const operation = RDS_ENGINES[engine];
-  if (operation === undefined) return unestimable(`engine "${engine}" is not supported`);
+  if (operation === undefined) return unestimable(notSupported(W.engine, engine));
   const cls = str(attrs, "instance_class");
   if (cls === undefined || isUnknown(unknown, "instance_class")) {
-    return unestimable("instance class is not known until apply");
+    return unestimable(unknownUntilApply(W.instanceClass));
   }
   const multiAzValue = readSet((a, k) => a[k], attrs, unknown, "multi_az", env);
-  if (multiAzValue === "unknown") return unestimable("Multi-AZ is not known until apply");
+  if (multiAzValue === "unknown") return unestimable(unknownUntilApply(W.multiAz));
   const multiAz = multiAzValue === true;
   // The RDS API reference states no default for MultiAZ; say so when we assume Single-AZ.
-  const azNote = multiAzValue === undefined ? " Single-AZ (multi_az not set)" : "";
+  const az = multiAz
+    ? msg(" Multi-AZ", " マルチ AZ")
+    : multiAzValue === undefined
+      ? msg(" Single-AZ (multi_az not set)", " シングル AZ・multi_az の指定なし")
+      : msg("", "");
   const lines: UsageLine[] = [
     {
       serviceCode: "AmazonRDS",
       usageType: `${prefix}${multiAz ? "Multi-AZUsage" : "InstanceUsage"}:${cls}`,
       operation,
-      amount: HOURS_PER_MONTH,
-      description: `${cls} ${engine}${multiAz ? " Multi-AZ" : azNote} (${HOURS_PER_MONTH} h)`,
+      amount: H,
+      description: msg(
+        `${cls} ${engine}${az.en} (${H} h)`,
+        `${cls} ${engine}${az.ja}（${H} 時間）`,
+      ),
     },
   ];
-  const partial: string[] = [];
-  const excluded: string[] = [];
+  const partial: Msg[] = [];
   // Default per the RDS CreateDBInstance API reference: io1 with Iops, otherwise gp3.
   const setType = readSet(str, attrs, unknown, "storage_type", env);
   // The default depends on whether Iops is specified, i.e. written in the configuration.
@@ -344,32 +432,32 @@ const dbInstance: Estimator = (attrs, unknown, prefix, env) => {
     setType !== undefined ? setType : iopsWritten ? (iopsKnown ? "io1" : "unknown") : "gp3";
   const size = read(num, attrs, unknown, "allocated_storage");
   if (size === undefined || size === "unknown") {
-    partial.push("storage size is not known until apply");
+    partial.push(unknownUntilApply(W.storageSize));
   } else if (storageType === undefined || storageType === "unknown") {
-    partial.push("storage type is not known until apply");
+    partial.push(unknownUntilApply(W.storageType));
   } else {
     const storage = RDS_STORAGE[storageType];
     if (storage === undefined) {
-      partial.push(`${storageType} storage is not supported`);
+      partial.push(notSupported(W.storageType, storageType));
     } else {
       lines.push({
         serviceCode: "AmazonRDS",
         usageType: prefix + (multiAz ? storage.multi : storage.single),
         operation,
         amount: size,
-        description: `${storageType} storage ${size} GB`,
+        description: storageLine(storageType, size),
       });
       if (storage.iops !== undefined) {
         const piops = read(num, attrs, unknown, "iops");
         if (piops === "unknown") {
-          partial.push("provisioned IOPS is not known until apply");
+          partial.push(unknownUntilApply(W.piops));
         } else if (piops !== undefined && piops > 0) {
           lines.push({
             serviceCode: "AmazonRDS",
             usageType: prefix + (multiAz ? storage.iops.multi : storage.iops.single),
             operation,
             amount: piops,
-            description: `${piops} provisioned IOPS`,
+            description: msg(`${piops} provisioned IOPS`, `プロビジョンド IOPS ${piops}`),
           });
         }
       }
@@ -377,12 +465,21 @@ const dbInstance: Estimator = (attrs, unknown, prefix, env) => {
       const iops = num(attrs, "iops");
       const throughput = num(attrs, "storage_throughput");
       if (storageType === "gp3" && ((iops ?? 0) > 3000 || (throughput ?? 0) > 125)) {
-        partial.push("gp3 IOPS and throughput above the baseline are not supported");
+        partial.push(GP3_ABOVE_BASELINE);
       }
     }
   }
-  excluded.push("RDS backup storage beyond the free allowance", "data transfer");
-  return { lines, partial, excluded };
+  return {
+    lines,
+    partial,
+    excluded: [
+      msg(
+        "RDS backup storage beyond the free allowance",
+        "無料枠を超える RDS のバックアップストレージ",
+      ),
+      DATA_TRANSFER,
+    ],
+  };
 };
 
 // ---------------------------------------------------------------- VPC / ELB
@@ -393,12 +490,14 @@ const natGateway: Estimator = (_attrs, _unknown, prefix) => ({
       serviceCode: "AmazonEC2",
       usageType: `${prefix}NatGateway-Hours`,
       operation: "NatGateway",
-      amount: HOURS_PER_MONTH,
-      description: `NAT gateway (${HOURS_PER_MONTH} h)`,
+      amount: H,
+      description: msg(`NAT gateway (${H} h)`, `NAT ゲートウェイ（${H} 時間）`),
     },
   ],
   partial: [],
-  excluded: ["NAT gateway data processing (per GB)"],
+  excluded: [
+    msg("NAT gateway data processing (per GB)", "NAT ゲートウェイのデータ処理（GB 単位）"),
+  ],
 });
 
 const LB_OPERATIONS: Readonly<Record<string, string>> = {
@@ -407,43 +506,57 @@ const LB_OPERATIONS: Readonly<Record<string, string>> = {
   gateway: "LoadBalancing:Gateway",
 };
 
+const LB_NAMES_JA: Readonly<Record<string, string>> = {
+  application: "Application Load Balancer",
+  network: "Network Load Balancer",
+  gateway: "Gateway Load Balancer",
+};
+
 const loadBalancer: Estimator = (attrs, unknown, prefix) => {
   if (isUnknown(unknown, "load_balancer_type")) {
-    return unestimable("load balancer type is not known until apply");
+    return unestimable(unknownUntilApply(W.lbType));
   }
   const type = str(attrs, "load_balancer_type") ?? "application";
   const operation = LB_OPERATIONS[type];
-  if (operation === undefined) return unestimable(`load balancer type "${type}" is not supported`);
+  if (operation === undefined) return unestimable(notSupported(W.lbType, type));
   return {
     lines: [
       {
         serviceCode: "AWSELB",
         usageType: `${prefix}LoadBalancerUsage`,
         operation,
-        amount: HOURS_PER_MONTH,
-        description: `${type} load balancer (${HOURS_PER_MONTH} h)`,
+        amount: H,
+        description: msg(
+          `${type} load balancer (${H} h)`,
+          `${LB_NAMES_JA[type] ?? type}（${H} 時間）`,
+        ),
       },
     ],
     partial: [],
-    excluded: ["load balancer capacity units (LCU, depend on traffic)"],
+    excluded: [
+      msg(
+        "load balancer capacity units (LCU, depend on traffic)",
+        "ロードバランサーのキャパシティユニット（LCU。通信量で決まる）",
+      ),
+    ],
   };
 };
 
 // ---------------------------------------------------------------- public IPv4 / VPC endpoints
 
 /** Amazon VPC bills us-east-1 usage with the USE1- prefix. */
-function publicIpv4(env: Env, description: string): UsageLine {
+function publicIpv4(env: Env): UsageLine {
   return {
     serviceCode: "AmazonVPC",
     usageType: `${env.px("use1")}PublicIPv4:InUseAddress`,
     operation: "",
-    amount: HOURS_PER_MONTH,
-    description: `${description} (${HOURS_PER_MONTH} h)`,
+    amount: H,
+    description: msg(`public IPv4 address (${H} h)`, `パブリック IPv4 アドレス（${H} 時間）`),
   };
 }
 
 const eip: Estimator = (_attrs, _unknown, _prefix, env) => ({
-  lines: [publicIpv4(env, "public IPv4 address")],
+  lines: [publicIpv4(env)],
   partial: [],
   excluded: [],
 });
@@ -455,9 +568,14 @@ function listLength(attrs: Attributes, unknown: Attributes, key: string): number
   return Array.isArray(v) ? v.length : undefined;
 }
 
+const ENDPOINT_NAMES_JA: Readonly<Record<string, string>> = {
+  Interface: "インターフェイス型エンドポイント",
+  GatewayLoadBalancer: "Gateway Load Balancer 型エンドポイント",
+};
+
 const vpcEndpoint: Estimator = (attrs, unknown, _prefix, env) => {
   if (isUnknown(unknown, "vpc_endpoint_type")) {
-    return unestimable("endpoint type is not known until apply");
+    return unestimable(unknownUntilApply(W.endpointType));
   }
   const type = str(attrs, "vpc_endpoint_type") ?? "Gateway";
   if (type === "Gateway") {
@@ -469,21 +587,26 @@ const vpcEndpoint: Estimator = (attrs, unknown, _prefix, env) => {
       : type === "GatewayLoadBalancer"
         ? "VpcEndpoint-GWLBE-Hours"
         : undefined;
-  if (usageType === undefined) return unestimable(`endpoint type "${type}" is not supported`);
+  if (usageType === undefined) return unestimable(notSupported(W.endpointType, type));
   const subnets = listLength(attrs, unknown, "subnet_ids");
-  if (subnets === undefined) return unestimable("number of subnets is not known until apply");
+  if (subnets === undefined) return unestimable(unknownUntilApply(W.subnets));
   return {
     lines: [
       {
         serviceCode: "AmazonVPC",
         usageType: `${env.px("use1")}${usageType}`,
         operation: "VpcEndpoint",
-        amount: HOURS_PER_MONTH * subnets,
-        description: `${type} endpoint in ${subnets} subnet${subnets === 1 ? "" : "s"} (${HOURS_PER_MONTH} h each)`,
+        amount: H * subnets,
+        description: msg(
+          `${type} endpoint in ${subnets} subnet${subnets === 1 ? "" : "s"} (${H} h each)`,
+          `${ENDPOINT_NAMES_JA[type] ?? type}、サブネット ${subnets} 個（各 ${H} 時間）`,
+        ),
       },
     ],
     partial: [],
-    excluded: ["VPC endpoint data processing (per GB)"],
+    excluded: [
+      msg("VPC endpoint data processing (per GB)", "VPC エンドポイントのデータ処理（GB 単位）"),
+    ],
   };
 };
 
@@ -504,20 +627,29 @@ function cacheNodes(
 ): UsageResult {
   const e = engine ?? "redis";
   const operation = CACHE_ENGINES[e];
-  if (operation === undefined) return unestimable(`engine "${e}" is not supported`);
-  if (nodeType === undefined) return unestimable("node type is not known until apply");
+  if (operation === undefined) return unestimable(notSupported(W.engine, e));
+  if (nodeType === undefined) return unestimable(unknownUntilApply(W.nodeType));
   return {
     lines: [
       {
         serviceCode: "AmazonElastiCache",
         usageType: `${prefix}NodeUsage:${nodeType}`,
         operation,
-        amount: HOURS_PER_MONTH * nodes,
-        description: `${nodes} × ${nodeType} ${e} (${HOURS_PER_MONTH} h each)`,
+        amount: H * nodes,
+        description: msg(
+          `${nodes} × ${nodeType} ${e} (${H} h each)`,
+          `${nodeType} ${e} × ${nodes}（各 ${H} 時間）`,
+        ),
       },
     ],
     partial: [],
-    excluded: ["ElastiCache backup storage beyond the free allowance", "data transfer"],
+    excluded: [
+      msg(
+        "ElastiCache backup storage beyond the free allowance",
+        "無料枠を超える ElastiCache のバックアップストレージ",
+      ),
+      DATA_TRANSFER,
+    ],
   };
 }
 
@@ -525,17 +657,18 @@ const elasticacheCluster: Estimator = (attrs, unknown, prefix, env) => {
   // With replication_group_id the cluster adds a read replica to the group: one more node that
   // the group's num_cache_clusters does not count, whose node type comes from the group.
   const group = readSet(str, attrs, unknown, "replication_group_id", env);
-  if (group === "unknown") {
-    return unestimable("replication group membership is not known until apply");
-  }
+  if (group === "unknown") return unestimable(unknownUntilApply(W.membership));
   if (group !== undefined) {
     return unestimable(
-      `read replica added to replication group ${group}; its node type comes from the group`,
+      msg(
+        `read replica added to replication group ${group}; its node type comes from the group`,
+        `レプリケーショングループ ${group} に足すリードレプリカで、ノードタイプはグループで決まる`,
+      ),
     );
   }
-  if (isUnknown(unknown, "engine")) return unestimable("engine is not known until apply");
+  if (isUnknown(unknown, "engine")) return unestimable(unknownUntilApply(W.engine));
   const nodes = read(num, attrs, unknown, "num_cache_nodes");
-  if (nodes === "unknown") return unestimable("number of nodes is not known until apply");
+  if (nodes === "unknown") return unestimable(unknownUntilApply(W.nodes));
   return cacheNodes(
     str(attrs, "engine"),
     isUnknown(unknown, "node_type") ? undefined : str(attrs, "node_type"),
@@ -545,9 +678,9 @@ const elasticacheCluster: Estimator = (attrs, unknown, prefix, env) => {
 };
 
 const elasticacheReplicationGroup: Estimator = (attrs, unknown, prefix, env) => {
-  // Defaults per the provider documentation: engine "redis", num_cache_clusters 1.
+  // Defaults: engine "redis" (provider implementation), num_cache_clusters 1 (provider docs).
   if (readSet(str, attrs, unknown, "engine", env) === "unknown") {
-    return unestimable("engine is not known until apply");
+    return unestimable(unknownUntilApply(W.engine));
   }
   const shards = readSet(num, attrs, unknown, "num_node_groups", env);
   const replicas = readSet(num, attrs, unknown, "replicas_per_node_group", env);
@@ -565,7 +698,7 @@ const elasticacheReplicationGroup: Estimator = (attrs, unknown, prefix, env) => 
   } else if (typeof shards === "number" && typeof replicas === "number") {
     nodes = shards * (replicas + 1);
   }
-  if (nodes === undefined) return unestimable("number of nodes is not known until apply");
+  if (nodes === undefined) return unestimable(unknownUntilApply(W.nodes));
   return cacheNodes(
     str(attrs, "engine"),
     isUnknown(unknown, "node_type") ? undefined : str(attrs, "node_type"),
@@ -582,14 +715,17 @@ const AURORA_ENGINES: Readonly<Record<string, string>> = {
   "aurora-postgresql": "CreateDBInstance:0021",
 };
 
-const AURORA_USAGE_EXCLUDED = [
-  "Aurora storage and I/O (depend on usage)",
-  "Aurora backup storage beyond the free allowance",
+const AURORA_USAGE_EXCLUDED: Msg[] = [
+  msg("Aurora storage and I/O (depend on usage)", "Aurora のストレージと I/O（使用量で決まる）"),
+  msg(
+    "Aurora backup storage beyond the free allowance",
+    "無料枠を超える Aurora のバックアップストレージ",
+  ),
 ];
 
 const rdsCluster: Estimator = (attrs, unknown) => {
   const engine = str(attrs, "engine");
-  if (isUnknown(unknown, "engine")) return unestimable("engine is not known until apply");
+  if (isUnknown(unknown, "engine")) return unestimable(unknownUntilApply(W.engine));
   // A Multi-AZ DB cluster (non-Aurora engine, instances described on the cluster) has no
   // aws_rds_cluster_instance resources, so its cost would vanish here.
   if (
@@ -597,11 +733,13 @@ const rdsCluster: Estimator = (attrs, unknown) => {
     str(attrs, "db_cluster_instance_class") !== undefined ||
     isUnknown(unknown, "db_cluster_instance_class")
   ) {
-    return unestimable("Multi-AZ DB clusters are not supported");
+    return unestimable(
+      msg("Multi-AZ DB clusters are not supported", "マルチ AZ DB クラスターには対応していない"),
+    );
   }
   const mode = str(attrs, "engine_mode");
   if (mode !== undefined && mode !== "provisioned") {
-    return unestimable(`engine mode "${mode}" is not supported`);
+    return unestimable(notSupported(W.engineMode, mode));
   }
   // Instances are separate resources; the cluster itself is billed by storage and I/O used.
   return { lines: [], partial: [], excluded: AURORA_USAGE_EXCLUDED };
@@ -610,33 +748,42 @@ const rdsCluster: Estimator = (attrs, unknown) => {
 const rdsClusterInstance: Estimator = (attrs, unknown, prefix, env) => {
   const engine = str(attrs, "engine");
   if (engine === undefined || isUnknown(unknown, "engine")) {
-    return unestimable("engine is not known until apply");
+    return unestimable(unknownUntilApply(W.engine));
   }
   const operation = AURORA_ENGINES[engine];
-  if (operation === undefined) return unestimable(`engine "${engine}" is not supported`);
+  if (operation === undefined) return unestimable(notSupported(W.engine, engine));
   const cls = str(attrs, "instance_class");
   if (cls === undefined || isUnknown(unknown, "instance_class")) {
-    return unestimable("instance class is not known until apply");
+    return unestimable(unknownUntilApply(W.instanceClass));
   }
   if (cls === "db.serverless") {
-    return unestimable("Aurora Serverless v2 is billed by the capacity it uses");
+    return unestimable(
+      msg(
+        "Aurora Serverless v2 is billed by the capacity it uses",
+        "Aurora Serverless v2 は使った容量で課金される",
+      ),
+    );
   }
   const storage = env.context.auroraStorageType;
   const ioOptimized = storage === "aurora-iopt1";
   const partial =
     storage === undefined
       ? [
-          "storage type of the cluster could not be read; priced as Aurora Standard (I/O-Optimized costs more per hour)",
+          msg(
+            "storage type of the cluster could not be read; priced as Aurora Standard (I/O-Optimized costs more per hour)",
+            "クラスターのストレージの種類を読めないため Aurora Standard の単価で試算した（I/O-Optimized なら時間単価が高い）",
+          ),
         ]
       : [];
+  const io = ioOptimized ? " I/O-Optimized" : "";
   return {
     lines: [
       {
         serviceCode: "AmazonRDS",
         usageType: `${prefix}${ioOptimized ? "InstanceUsageIOOptimized" : "InstanceUsage"}:${cls}`,
         operation,
-        amount: HOURS_PER_MONTH,
-        description: `${cls} ${engine}${ioOptimized ? " I/O-Optimized" : ""} (${HOURS_PER_MONTH} h)`,
+        amount: H,
+        description: msg(`${cls} ${engine}${io} (${H} h)`, `${cls} ${engine}${io}（${H} 時間）`),
       },
     ],
     partial,
@@ -652,14 +799,20 @@ const eksCluster: Estimator = (_attrs, _unknown, _prefix, env) => ({
       serviceCode: "AmazonEKS",
       usageType: `${env.px("use1")}AmazonEKS-Hours:perCluster`,
       operation: "CreateOperation",
-      amount: HOURS_PER_MONTH,
-      description: `EKS cluster (${HOURS_PER_MONTH} h)`,
+      amount: H,
+      description: msg(`EKS cluster (${H} h)`, `EKS クラスター（${H} 時間）`),
     },
   ],
   partial: [],
   excluded: [
-    "EKS extended support surcharge for Kubernetes versions past standard support",
-    "EKS worker nodes (priced as their own resources when they are aws_instance)",
+    msg(
+      "EKS extended support surcharge for Kubernetes versions past standard support",
+      "標準サポートを過ぎた Kubernetes のバージョンにかかる EKS の延長サポート料金",
+    ),
+    msg(
+      "EKS worker nodes (priced as their own resources when they are aws_instance)",
+      "EKS のワーカーノード（aws_instance なら、そのリソースとして試算する）",
+    ),
   ],
 });
 
@@ -675,17 +828,30 @@ const OPENSEARCH_STORAGE: Readonly<Record<string, string>> = {
 /** "r6g.large.search" / "t3.small.elasticsearch" -> "r6g.large" */
 const searchInstance = (type: string) => type.replace(/\.(search|elasticsearch)$/, "");
 
+const nodeLine = (count: number, type: string, en: string, ja: string): Msg =>
+  msg(
+    `${count} × ${type} ${en}${count === 1 ? "" : "s"} (${H} h each)`,
+    `${type} ${ja} × ${count}（各 ${H} 時間）`,
+  );
+
 const openSearchDomain: Estimator = (attrs, unknown, prefix, env) => {
   const cluster = blocks(attrs, "cluster_config")[0] ?? {};
   const cu = blockUnknown(unknown, "cluster_config", 0);
   if (isUnknown(unknown, "cluster_config") || cu.instance_type === true) {
-    return unestimable("instance type is not known until apply");
+    return unestimable(unknownUntilApply(W.instanceType));
   }
   const type = str(cluster, "instance_type");
-  if (type === undefined) return unestimable("instance type is not set in cluster_config");
+  if (type === undefined) {
+    return unestimable(
+      msg(
+        "instance type is not set in cluster_config",
+        "cluster_config にインスタンスタイプが指定されていない",
+      ),
+    );
+  }
   const count = cu.instance_count === true ? undefined : (num(cluster, "instance_count") ?? 1);
-  if (count === undefined) return unestimable("number of instances is not known until apply");
-  const line = (usageType: string, amount: number, description: string): UsageLine => ({
+  if (count === undefined) return unestimable(unknownUntilApply(W.instances));
+  const line = (usageType: string, amount: number, description: Msg): UsageLine => ({
     serviceCode: "AmazonES",
     usageType: prefix + usageType,
     operation: "ESDomain",
@@ -695,29 +861,31 @@ const openSearchDomain: Estimator = (attrs, unknown, prefix, env) => {
   const lines = [
     line(
       `ESInstance:${searchInstance(type)}`,
-      HOURS_PER_MONTH * count,
-      `${count} × ${type} data node${count === 1 ? "" : "s"} (${HOURS_PER_MONTH} h each)`,
+      H * count,
+      nodeLine(count, type, "data node", "データノード"),
     ),
   ];
-  const partial: string[] = [];
+  const partial: Msg[] = [];
   if (cu.dedicated_master_enabled === true) {
-    partial.push("dedicated master nodes are not known until apply");
+    partial.push(unknownUntilApply(W.masters, true));
   } else if (cluster.dedicated_master_enabled === true) {
     const masterType = str(cluster, "dedicated_master_type");
     const masters = num(cluster, "dedicated_master_count");
     if (masterType === undefined || masters === undefined) {
-      partial.push("dedicated master nodes are not known until apply");
+      partial.push(unknownUntilApply(W.masters, true));
     } else {
       lines.push(
         line(
           `ESInstance:${searchInstance(masterType)}`,
-          HOURS_PER_MONTH * masters,
-          `${masters} × ${masterType} master node${masters === 1 ? "" : "s"} (${HOURS_PER_MONTH} h each)`,
+          H * masters,
+          nodeLine(masters, masterType, "master node", "専用マスターノード"),
         ),
       );
     }
   }
-  if (cluster.warm_enabled === true) partial.push("UltraWarm nodes are not supported");
+  if (cluster.warm_enabled === true) {
+    partial.push(msg("UltraWarm nodes are not supported", "UltraWarm ノードには対応していない"));
+  }
 
   const ebs = blocks(attrs, "ebs_options")[0];
   const eu = blockUnknown(unknown, "ebs_options", 0);
@@ -727,32 +895,45 @@ const openSearchDomain: Estimator = (attrs, unknown, prefix, env) => {
   const ebsUnknown =
     eu.ebs_enabled === true ||
     (ebsOptionsUnknown && env.context.configured?.has("ebs_options") !== false);
-  const excluded = ["OpenSearch snapshots and data transfer"];
+  const excluded = [
+    msg("OpenSearch snapshots and data transfer", "OpenSearch のスナップショットとデータ転送"),
+  ];
   if (ebsOptionsUnknown && !ebsUnknown) {
-    excluded.push("OpenSearch EBS storage written as a dynamic ebs_options block");
+    excluded.push(
+      msg(
+        "OpenSearch EBS storage written as a dynamic ebs_options block",
+        "dynamic ブロックで書いた ebs_options の OpenSearch の EBS ストレージ",
+      ),
+    );
   }
   if (ebsUnknown) {
-    partial.push("EBS storage is not known until apply");
+    partial.push(unknownUntilApply(W.ebsStorage));
   } else if (ebs !== undefined && ebs.ebs_enabled === true) {
     const volumeType = eu.volume_type === true ? undefined : (str(ebs, "volume_type") ?? "gp2");
     const size = eu.volume_size === true ? undefined : num(ebs, "volume_size");
     const storage = volumeType === undefined ? undefined : OPENSEARCH_STORAGE[volumeType];
     if (size === undefined || volumeType === undefined) {
-      partial.push("EBS storage is not known until apply");
+      partial.push(unknownUntilApply(W.ebsStorage));
     } else if (storage === undefined) {
-      partial.push(`${volumeType} storage is not supported`);
+      partial.push(notSupported(W.storageType, volumeType));
     } else {
-      lines.push(line(storage, size * count, `${volumeType} storage ${size} GB × ${count}`));
+      lines.push(line(storage, size * count, storageLine(volumeType, size, ` × ${count}`)));
       const iops = num(ebs, "iops");
       if (volumeType === "io1") {
-        if (eu.iops === true) partial.push("provisioned IOPS is not known until apply");
+        if (eu.iops === true) partial.push(unknownUntilApply(W.piops));
         else if (iops !== undefined && iops > 0) {
-          lines.push(line("ES:PIOPS", iops * count, `${iops} provisioned IOPS × ${count}`));
+          lines.push(
+            line(
+              "ES:PIOPS",
+              iops * count,
+              msg(`${iops} provisioned IOPS × ${count}`, `プロビジョンド IOPS ${iops} × ${count}`),
+            ),
+          );
         }
       }
       const throughput = num(ebs, "throughput");
       if (volumeType === "gp3" && ((iops ?? 0) > 3000 || (throughput ?? 0) > 125)) {
-        partial.push("gp3 IOPS and throughput above the baseline are not supported");
+        partial.push(GP3_ABOVE_BASELINE);
       }
     }
   }
@@ -804,7 +985,11 @@ export function estimateUsage(
   context: UsageContext = {},
 ): UsageResult {
   const estimator = ESTIMATORS[type];
-  if (estimator === undefined) return unestimable(`resource type ${type} is not supported`);
+  if (estimator === undefined) {
+    return unestimable(
+      msg(`resource type ${type} is not supported`, `リソースの種類 ${type} には対応していない`),
+    );
+  }
   const env: Env = { region, context, px: (style) => usageTypePrefix(region, style) };
   return estimator(attrs, unknown, usageTypePrefix(region), env);
 }

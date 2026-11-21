@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { estimateUsage, isSupportedType } from "../src/resources.js";
+import { en } from "./helpers.js";
 
 const TOKYO = "ap-northeast-1";
 const VIRGINIA = "us-east-1";
@@ -64,7 +65,7 @@ describe("aws_elasticache_cluster", () => {
 
   it("lists a read replica added to a replication group as not estimated", () => {
     const r = usage("aws_elasticache_cluster", { replication_group_id: "rg-1" });
-    expect(r.unestimable).toContain("read replica added to replication group rg-1");
+    expect(r.unestimable?.en).toContain("read replica added to replication group rg-1");
   });
 
   it("cannot estimate when replication group membership is not known until apply", () => {
@@ -74,7 +75,7 @@ describe("aws_elasticache_cluster", () => {
       TOKYO,
       { replication_group_id: true },
     );
-    expect(r.unestimable).toContain("membership");
+    expect(r.unestimable?.en).toContain("membership");
   });
 
   it("cannot estimate a node type that is not known until apply", () => {
@@ -124,7 +125,7 @@ describe("aws_rds_cluster_instance", () => {
     expect(rows(r)).toEqual([
       ["AmazonRDS", "APN1-InstanceUsage:db.r6g.large", "CreateDBInstance:0016", 730],
     ]);
-    expect(r.partial).toEqual([]);
+    expect(en(r.partial)).toEqual([]);
   });
 
   it("prices an instance of an I/O-Optimized cluster at its own rate", () => {
@@ -146,7 +147,7 @@ describe("aws_rds_cluster_instance", () => {
       instance_class: "db.r6g.large",
     });
     expect(r.lines).toHaveLength(1);
-    expect(r.partial[0]).toContain("I/O-Optimized");
+    expect(r.partial[0]?.en).toContain("I/O-Optimized");
   });
 
   it("cannot estimate Aurora Serverless v2, which is billed by capacity used", () => {
@@ -154,7 +155,7 @@ describe("aws_rds_cluster_instance", () => {
       engine: "aurora-postgresql",
       instance_class: "db.serverless",
     });
-    expect(r.unestimable).toContain("Serverless");
+    expect(r.unestimable?.en).toContain("Serverless");
   });
 });
 
@@ -163,7 +164,7 @@ describe("aws_rds_cluster", () => {
     const r = usage("aws_rds_cluster", { engine: "aurora-mysql" });
     expect(r.lines).toEqual([]);
     expect(r.unestimable).toBeUndefined();
-    expect(r.excluded.join(" ")).toContain("Aurora storage");
+    expect(en(r.excluded).join(" ")).toContain("Aurora storage");
   });
 
   it("cannot estimate Aurora Serverless v1", () => {
@@ -183,7 +184,7 @@ describe("aws_eks_cluster", () => {
   });
 
   it("names the extended support surcharge", () => {
-    expect(usage("aws_eks_cluster", {}).excluded.join(" ")).toContain("extended support");
+    expect(en(usage("aws_eks_cluster", {}).excluded).join(" ")).toContain("extended support");
   });
 });
 
@@ -232,7 +233,7 @@ describe("aws_opensearch_domain", () => {
       ],
       ebs_options: [{ ebs_enabled: true, volume_type: "gp3", volume_size: 20, iops: 6000 }],
     });
-    expect(r.partial).toEqual([
+    expect(en(r.partial)).toEqual([
       "UltraWarm nodes are not supported",
       "gp3 IOPS and throughput above the baseline are not supported",
     ]);
@@ -353,7 +354,7 @@ describe("aws_db_instance provisioned IOPS storage", () => {
       { iops: true },
     );
     expect(r.lines).toHaveLength(2);
-    expect(r.partial).toEqual(["provisioned IOPS is not known until apply"]);
+    expect(en(r.partial)).toEqual(["provisioned IOPS is not known until apply"]);
   });
 });
 
@@ -372,8 +373,8 @@ describe("attributes left out of the configuration take their defaults", () => {
       ["AmazonRDS", "APN1-InstanceUsage:db.t3.micro", "CreateDBInstance:0014", 730],
       ["AmazonRDS", "APN1-RDS:GP3-Storage", "CreateDBInstance:0014", 20],
     ]);
-    expect(r.lines[0]?.description).toContain("multi_az not set");
-    expect(r.partial).toEqual([]);
+    expect(r.lines[0]?.description.en).toContain("multi_az not set");
+    expect(en(r.partial)).toEqual([]);
   });
 
   it("still cannot estimate multi_az set from a value known only after apply", () => {
@@ -454,7 +455,7 @@ describe("fixes from the review of the added resources", () => {
       storage_type: "io1",
       iops: 1000,
     });
-    expect(r.unestimable).toBe("Multi-AZ DB clusters are not supported");
+    expect(r.unestimable?.en).toBe("Multi-AZ DB clusters are not supported");
   });
 
   it("does not assume gp3 when iops is written but known only after apply", () => {
@@ -465,7 +466,7 @@ describe("fixes from the review of the added resources", () => {
       { storage_type: true, iops: true, multi_az: true },
       configured("engine", "instance_class", "allocated_storage", "iops"),
     );
-    expect(r.partial).toEqual(["storage type is not known until apply"]);
+    expect(en(r.partial)).toEqual(["storage type is not known until apply"]);
   });
 
   it("reports OpenSearch EBS storage and master nodes that are known only after apply", () => {
@@ -481,7 +482,7 @@ describe("fixes from the review of the added resources", () => {
         ebs_options: [{ ebs_enabled: true }],
       },
     );
-    expect(r.partial).toEqual([
+    expect(en(r.partial)).toEqual([
       "dedicated master nodes are not known until apply",
       "EBS storage is not known until apply",
     ]);
@@ -495,8 +496,10 @@ describe("fixes from the review of the added resources", () => {
       { ebs_options: true },
       configured("domain_name", "cluster_config"),
     );
-    expect(r.partial).toEqual([]);
-    expect(r.excluded).toContain("OpenSearch EBS storage written as a dynamic ebs_options block");
+    expect(en(r.partial)).toEqual([]);
+    expect(en(r.excluded)).toContain(
+      "OpenSearch EBS storage written as a dynamic ebs_options block",
+    );
   });
 
   it("cannot estimate an OpenSearch domain without an instance type", () => {
@@ -507,7 +510,7 @@ describe("fixes from the review of the added resources", () => {
     const r = usage("aws_instance", { instance_type: "t3.micro" }, TOKYO, {
       associate_public_ip_address: true,
     });
-    expect(r.excluded).toContain("EC2 public IPv4 address when the subnet assigns one");
+    expect(en(r.excluded)).toContain("EC2 public IPv4 address when the subnet assigns one");
   });
 
   it("counts one shard when only replicas_per_node_group is set", () => {

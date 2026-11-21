@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { detectRegion, estimatePlan, type TerraformPlan } from "../src/estimate.js";
 import type { Pricer } from "../src/pricing.js";
+import { en } from "./helpers.js";
 
 /** Fake hourly prices by instance type; anything else costs 1 per unit; "bad" usage types fail. */
 const HOURLY: Record<string, number> = { "t3.micro": 0.01, "t3.large": 0.08 };
@@ -146,7 +147,7 @@ describe("estimatePlan", () => {
       pricer,
     );
     expect(r.resources).toEqual([]);
-    expect(r.notEstimated.map((n) => [n.address, n.reason])).toEqual([
+    expect(r.notEstimated.map((n) => [n.address, n.reason.en])).toEqual([
       ["aws_s3_bucket.logs", "resource type aws_s3_bucket is not supported"],
       ["aws_instance.x", "instance type is not known until apply"],
     ]);
@@ -161,7 +162,7 @@ describe("estimatePlan", () => {
       pricer,
     );
     expect(r.resources).toEqual([]);
-    expect(r.notEstimated[0]?.reason).toContain("BAD_REQUEST");
+    expect(r.notEstimated[0]?.reason.en).toContain("BAD_REQUEST");
     expect(r.totalDelta).toBe(0);
   });
 
@@ -190,7 +191,7 @@ describe("estimatePlan", () => {
       "us-east-1",
       pricer,
     );
-    expect(r.resources[0]?.partial).toEqual([
+    expect(en(r.resources[0]?.partial)).toEqual([
       "before the change: gp3 IOPS and throughput above the baseline are not supported",
     ]);
   });
@@ -214,7 +215,7 @@ describe("estimatePlan", () => {
       "us-east-1",
       pricer,
     );
-    expect(r.resources[0]?.excluded).toContain("NAT gateway data processing (per GB)");
+    expect(en(r.resources[0]?.excluded)).toContain("NAT gateway data processing (per GB)");
   });
 });
 
@@ -286,7 +287,7 @@ describe("Aurora cluster storage type", () => {
       ),
     );
     expect(r?.lines[0]?.usageType).toBe("InstanceUsageIOOptimized:db.r6g.large");
-    expect(r?.partial).toEqual([]);
+    expect(en(r?.partial)).toEqual([]);
   });
 
   it("follows the reference in the configuration when the identifier is known only after apply", async () => {
@@ -363,12 +364,12 @@ describe("Aurora cluster storage type", () => {
     const r = await usageTypeOf(p);
     // storage_type is not set in the configuration, so the cluster is Aurora Standard.
     expect(r?.lines[0]?.usageType).toBe("InstanceUsage:db.r6g.large");
-    expect(r?.partial).toEqual([]);
+    expect(en(r?.partial)).toEqual([]);
   });
 
   it("reports the instance when its cluster cannot be found", async () => {
     const r = await usageTypeOf(plan(instance({ cluster_identifier: "elsewhere" })));
     expect(r?.lines[0]?.usageType).toBe("InstanceUsage:db.r6g.large");
-    expect(r?.partial[0]).toContain("I/O-Optimized");
+    expect(r?.partial[0]?.en).toContain("I/O-Optimized");
   });
 });

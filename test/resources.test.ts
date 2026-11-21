@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { estimateUsage, isAwsType, isSupportedType } from "../src/resources.js";
+import { en } from "./helpers.js";
 
 const TOKYO = "ap-northeast-1";
 const VIRGINIA = "us-east-1";
@@ -57,14 +58,14 @@ describe("aws_instance", () => {
       root_block_device: [{ volume_size: true }],
     });
     expect(r.lines).toHaveLength(1);
-    expect(r.partial).toEqual(["root volume size is not known until apply"]);
+    expect(en(r.partial)).toEqual(["root volume size is not known until apply"]);
   });
 
   it("reports the root volume when the whole block is not known until apply", () => {
     const r = usage("aws_instance", { instance_type: "t3.micro" }, TOKYO, {
       root_block_device: true,
     });
-    expect(r.partial).toEqual(["root volume size (from the AMI) is not known until apply"]);
+    expect(en(r.partial)).toEqual(["root volume size (from the AMI) is not known until apply"]);
   });
 
   it("does not flag extra EBS volumes that are not configured", () => {
@@ -72,7 +73,7 @@ describe("aws_instance", () => {
       ebs_block_device: true,
       root_block_device: [{ iops: true, throughput: true }],
     });
-    expect(r.partial).toEqual([]);
+    expect(en(r.partial)).toEqual([]);
   });
 
   it("cannot estimate an instance whose type is unknown", () => {
@@ -82,7 +83,7 @@ describe("aws_instance", () => {
 
   it("cannot estimate dedicated tenancy", () => {
     const r = usage("aws_instance", { instance_type: "t3.micro", tenancy: "dedicated" });
-    expect(r.unestimable).toContain("tenancy");
+    expect(r.unestimable?.en).toContain("tenancy");
   });
 });
 
@@ -135,7 +136,7 @@ describe("aws_ebs_volume", () => {
   it("reports io1 IOPS that are not known until apply", () => {
     const r = usage("aws_ebs_volume", { type: "io1", size: 100 }, TOKYO, { iops: true });
     expect(r.lines).toHaveLength(1);
-    expect(r.partial).toEqual(["volume IOPS is not known until apply"]);
+    expect(en(r.partial)).toEqual(["volume IOPS is not known until apply"]);
   });
 
   it("cannot estimate a volume whose size is unknown (for example from a snapshot)", () => {
@@ -185,7 +186,7 @@ describe("aws_db_instance", () => {
 
   it("cannot estimate an engine outside MySQL, PostgreSQL and MariaDB", () => {
     const r = usage("aws_db_instance", { engine: "oracle-ee", instance_class: "db.m5.large" });
-    expect(r.unestimable).toContain("oracle-ee");
+    expect(r.unestimable?.en).toContain("oracle-ee");
   });
 
   it("does not flag gp3 storage left at its baseline performance", () => {
@@ -200,7 +201,7 @@ describe("aws_db_instance", () => {
       TOKYO,
       { iops: true, storage_throughput: true },
     );
-    expect(r.partial).toEqual([]);
+    expect(en(r.partial)).toEqual([]);
   });
 
   it("reports storage whose size is not known until apply", () => {
@@ -210,7 +211,7 @@ describe("aws_db_instance", () => {
       TOKYO,
       { allocated_storage: true },
     );
-    expect(r.partial).toEqual(["storage size is not known until apply"]);
+    expect(en(r.partial)).toEqual(["storage size is not known until apply"]);
   });
 });
 
@@ -223,7 +224,7 @@ describe("aws_nat_gateway", () => {
       operation: "NatGateway",
       amount: 730,
     });
-    expect(r.excluded.join(" ")).toContain("data processing");
+    expect(en(r.excluded).join(" ")).toContain("data processing");
   });
 });
 
@@ -236,7 +237,7 @@ describe("aws_lb", () => {
       operation: "LoadBalancing:Application",
       amount: 730,
     });
-    expect(r.excluded.join(" ")).toContain("LCU");
+    expect(en(r.excluded).join(" ")).toContain("LCU");
   });
 
   it("prices network and gateway load balancers", () => {

@@ -1,0 +1,53 @@
+name: Terraform Cost Comment
+description: Comment how a Terraform plan changes the monthly AWS cost on the pull request, priced by the AWS Pricing Calculator API.
+author: k-kudo-hub
+branding:
+  icon: dollar-sign
+  color: orange
+
+inputs:
+  plan-json:
+    description: Path to the output of `terraform show -json <planfile>`.
+    required: true
+  aws-region:
+    description: Region the resources are created in. Read from the aws provider block in the plan when omitted.
+    required: false
+    default: ""
+  rate-type:
+    description: BEFORE_DISCOUNTS (public on-demand prices), AFTER_DISCOUNTS, or AFTER_DISCOUNTS_AND_COMMITMENTS.
+    required: false
+    default: BEFORE_DISCOUNTS
+  language:
+    description: Language of the comment, en or ja.
+    required: false
+    default: en
+  comment-tag:
+    description: Keeps a separate comment per plan when one PR runs several plans (for example the environment name).
+    required: false
+    default: ""
+  fail-on-unexpected:
+    description: Fail the step when the increase exceeds the cost-expectation in the PR description, or when cost increases and no expectation is declared.
+    required: false
+    default: "false"
+  github-token:
+    description: Token used to comment on the pull request.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  monthly-delta:
+    description: Estimated change of the monthly cost in USD (negative when cost goes down).
+  monthly-before:
+    description: Estimated monthly cost in USD of the estimated resources before the change.
+  monthly-after:
+    description: Estimated monthly cost in USD of the estimated resources after the change.
+  unexpected:
+    description: '"true" when the increase exceeds the declared expectation, or cost increases with no expectation declared.'
+  not-estimated-count:
+    description: Number of changed resources left out of the estimate.
+  region:
+    description: Region used for pricing.
+
+runs:
+  using: node24
+  main: dist/index.js

@@ -7,10 +7,12 @@
  */
 import { createAwsPricer } from "../src/pricing.js";
 import { supportedRegions } from "../src/regions.js";
-import { estimateUsage } from "../src/resources.js";
+import { estimateUsage, type UsageContext } from "../src/resources.js";
 import type { UsageLine } from "../src/types.js";
 
-const SAMPLES: Array<[string, Record<string, unknown>]> = [
+type Sample = [string, Record<string, unknown>, UsageContext?];
+
+const SAMPLES: Sample[] = [
   ["aws_instance", { instance_type: "t3.micro" }],
   ...["gp2", "st1", "sc1", "standard"].map((type): [string, Record<string, unknown>] => [
     "aws_ebs_volume",
@@ -31,12 +33,58 @@ const SAMPLES: Array<[string, Record<string, unknown>]> = [
   ...["application", "network", "gateway"].map(
     (load_balancer_type): [string, Record<string, unknown>] => ["aws_lb", { load_balancer_type }],
   ),
+  ...["mysql", "postgres"].flatMap((engine) =>
+    [false, true].flatMap((multi_az) =>
+      ["io1", "io2"].map(
+        (storage_type): Sample => [
+          "aws_db_instance",
+          {
+            engine,
+            instance_class: "db.t3.micro",
+            multi_az,
+            allocated_storage: 100,
+            storage_type,
+            iops: 1000,
+          },
+        ],
+      ),
+    ),
+  ),
+  ["aws_eip", {}],
+  ["aws_instance", { instance_type: "t3.micro", associate_public_ip_address: true }],
+  ["aws_vpc_endpoint", { vpc_endpoint_type: "Interface", subnet_ids: ["a"] }],
+  ["aws_vpc_endpoint", { vpc_endpoint_type: "GatewayLoadBalancer", subnet_ids: ["a"] }],
+  ...["redis", "memcached", "valkey"].map(
+    (engine): Sample => [
+      "aws_elasticache_cluster",
+      { engine, node_type: "cache.t3.micro", num_cache_nodes: 1 },
+    ],
+  ),
+  ...["aurora-mysql", "aurora-postgresql"].flatMap((engine) =>
+    ["aurora", "aurora-iopt1"].map(
+      (auroraStorageType): Sample => [
+        "aws_rds_cluster_instance",
+        { engine, instance_class: "db.t3.medium" },
+        { auroraStorageType },
+      ],
+    ),
+  ),
+  ["aws_eks_cluster", {}],
+  ...["gp2", "gp3", "io1", "standard"].map(
+    (volume_type): Sample => [
+      "aws_opensearch_domain",
+      {
+        cluster_config: [{ instance_type: "t3.small.search", instance_count: 1 }],
+        ebs_options: [{ ebs_enabled: true, volume_type, volume_size: 10, iops: 1000 }],
+      },
+    ],
+  ),
 ];
 
 const unique = new Map<string, UsageLine>();
 for (const region of supportedRegions()) {
-  for (const [type, attrs] of SAMPLES) {
-    for (const line of estimateUsage(type, attrs, {}, region).lines) {
+  for (const [type, attrs, context] of SAMPLES) {
+    for (const line of estimateUsage(type, attrs, {}, region, context).lines) {
       unique.set(`${line.serviceCode}|${line.usageType}|${line.operation}`, line);
     }
   }

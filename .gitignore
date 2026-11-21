@@ -2,3 +2,8 @@ node_modules/
 coverage/
 *.tfplan
 .terraform/
+
+# Terraform files of the end-to-end sample
+e2e/.terraform/
+e2e/.terraform.lock.hcl
+e2e/plan.json

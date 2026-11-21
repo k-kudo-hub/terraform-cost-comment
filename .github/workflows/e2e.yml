@@ -1,0 +1,51 @@
+name: End-to-end
+
+# Runs this action against e2e/main.tf on pull requests and comments the estimate.
+# Needs the repository variable AWS_E2E_ROLE_ARN: a role that GitHub OIDC can assume for pull
+# requests of this repository and that may call bcm-pricing-calculator:GetUsageLinesEstimatedCost.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+concurrency:
+  group: e2e-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+jobs:
+  e2e:
+    # Pull requests from forks get no OIDC token.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+      - name: Plan the sample configuration
+        working-directory: e2e
+        run: |
+          terraform init -input=false
+          terraform plan -input=false -refresh=false -out=tfplan
+          terraform show -json tfplan > plan.json
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_E2E_ROLE_ARN }}
+          aws-region: ap-northeast-1
+          # Keep the account ID out of the logs once the repository is public.
+          mask-aws-account-id: true
+      - id: cost
+        uses: ./
+        with:
+          plan-json: e2e/plan.json
+          language: ja
+          comment-tag: e2e
+      - name: Check the outputs
+        run: |
+          echo "delta=${{ steps.cost.outputs.monthly-delta }} unexpected=${{ steps.cost.outputs.unexpected }} not-estimated=${{ steps.cost.outputs.not-estimated-count }} region=${{ steps.cost.outputs.region }}"
+          test -n "${{ steps.cost.outputs.monthly-delta }}"
+          test "${{ steps.cost.outputs.region }}" = "ap-northeast-1"

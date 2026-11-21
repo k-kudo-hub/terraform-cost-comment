@@ -14,8 +14,8 @@ in every subnet, an instance class two sizes up. This action is built to catch t
 - The PR author writes the change they expect in the PR description (`cost-expectation: +50`).
   The comment says whether the estimate stays within it, and by how much it exceeds it.
 - When cost goes up and no expectation is written, the comment asks whether the increase is expected.
-- Resources the action cannot price are listed, never silently dropped, so the total is not mistaken
-  for the whole picture.
+- Changes the action cannot price are listed by resource, never silently dropped, so the total is
+  not mistaken for the whole picture.
 
 ## Who it is for
 
@@ -23,13 +23,24 @@ Platform teams and product leads who review infrastructure code and are asked to
 
 ## What the comment looks like
 
+With `cost-expectation: +50` in the PR description:
+
 ```markdown
 ### 💰 Monthly cost change: **+$1,346.60** /mo
 
 > [!WARNING]
-> This is **$1,296.60/mo more** than the expected change (+$50.00/mo). Check that the increase is intended before merging.
+> This is **$1,296.60/mo more** than the expected change (+$50.00/mo) for the estimated resources. Check that the increase is intended before merging.
 
-> ⚠️ 1 changed resource is not included in this total. The real change can be larger.
+> [!CAUTION]
+> 1 change is not included in this total. The real change can be larger.
+
+| | Monthly |
+|---|---:|
+| Before | $0.00 |
+| After | $1,346.60 |
+| Expected change | +$50.00 |
+
+#### Changes by resource (largest increase first)
 
 | Resource | Action | Before | After | Change |
 |---|---|---:|---:|---:|
@@ -41,13 +52,13 @@ Platform teams and product leads who review infrastructure code and are asked to
 
 #### ⚠️ Not estimated (1)
 
-| Resource | Action | Why |
+| Resource | Action | What is missing |
 |---|---|---|
 | `aws_s3_bucket.logs` | create | resource type aws_s3_bucket is not supported |
 ```
 
-Each push updates the same comment, so the PR keeps one current estimate. The full comment also lists
-the priced usage lines, what the estimate leaves out, and its assumptions.
+The real comment also has collapsible sections with the priced usage lines, what the estimate leaves
+out, and its assumptions. Each push updates the same comment, so the PR keeps one current estimate.
 
 ## Usage
 
@@ -58,6 +69,11 @@ on:
   pull_request:
     # "edited" re-runs the estimate when the PR description (cost-expectation) changes.
     types: [opened, synchronize, reopened, edited]
+
+# One run per PR at a time, so quick pushes and edits do not post two comments.
+concurrency:
+  group: terraform-cost-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -93,6 +109,11 @@ cost-expectation: +50
 
 The figure is USD per month. Use a negative figure (`cost-expectation: -20`) when the PR should save money.
 
+Pull requests from forks get a read-only token and no OIDC token, so the workflow above works for pull
+requests from branches of the same repository. Give the plan role read-only permissions, and limit its
+trust policy to pull requests of your repository (`token.actions.githubusercontent.com:sub` =
+`repo:OWNER/REPO:pull_request`).
+
 ### IAM permission
 
 The role needs one action in addition to what `terraform plan` needs. The API is
@@ -111,12 +132,12 @@ The role needs one action in addition to what `terraform plan` needs. The API is
 | Name | Default | Description |
 |---|---|---|
 | `plan-json` | (required) | Path to the output of `terraform show -json <planfile>`. |
-| `aws-region` | read from the plan | Region the resources are created in. Read from the `aws` provider block (a constant or a variable) when omitted. |
+| `aws-region` | see description | Region the resources are created in. When omitted: the `aws` provider block in the plan (a constant or a variable), then the `AWS_REGION` and `AWS_DEFAULT_REGION` environment variables, which `configure-aws-credentials` sets. |
 | `rate-type` | `BEFORE_DISCOUNTS` | `BEFORE_DISCOUNTS` (public on-demand prices), `AFTER_DISCOUNTS`, or `AFTER_DISCOUNTS_AND_COMMITMENTS`. The last two must be allowed by your Pricing Calculator rate preferences. |
 | `language` | `en` | Language of the comment: `en` or `ja`. |
 | `comment-tag` | (empty) | Keeps a separate comment per plan when one PR runs several plans, for example `prod` and `staging`. |
-| `fail-on-unexpected` | `false` | Fail the step when the increase exceeds `cost-expectation`, or when cost goes up and no expectation is written. |
-| `github-token` | `${{ github.token }}` | Token used to comment. |
+| `fail-on-unexpected` | `false` | Fail the step when the estimated increase exceeds `cost-expectation`, or when cost goes up and no expectation is written. |
+| `github-token` | `${{ github.token }}` | Token used to comment. Use the default token or a GitHub App token: the action updates only comments posted by a bot, so with a personal token it posts a new comment on every run. |
 
 ### Outputs
 
@@ -124,19 +145,22 @@ The role needs one action in addition to what `terraform plan` needs. The API is
 |---|---|
 | `monthly-delta` | Estimated change of the monthly cost in USD (negative when cost goes down). |
 | `monthly-before` / `monthly-after` | Estimated monthly cost of the estimated resources before and after the change. |
-| `unexpected` | `true` when the increase exceeds the expectation, or cost goes up with no expectation written. |
-| `not-estimated-count` | Number of changed resources left out of the estimate. |
+| `unexpected` | `true` when the estimated increase exceeds the expectation, or cost goes up with no expectation written. |
+| `not-estimated-count` | Number of changes left out of the total: whole resources, and parts of estimated resources. |
 | `region` | Region used for pricing. |
+
+`unexpected` and `fail-on-unexpected` judge the estimated amount only. To stop on changes the action
+cannot price, check `not-estimated-count` in a later step.
 
 Outside pull requests the action writes the estimate to the job summary only.
 
 ## What it estimates
 
-| Resource | Priced | Left out |
+| Resource | Priced | Not priced |
 |---|---|---|
-| `aws_instance` | Instance hours (Linux, on-demand, default tenancy), root and extra EBS volumes whose size and type are known at plan time | OS licenses other than Linux, data transfer |
+| `aws_instance` | Instance hours (Linux, on-demand, default tenancy), root and extra EBS volumes | OS licenses other than Linux, data transfer |
 | `aws_ebs_volume` | Storage of gp2, gp3, io1, io2, st1, sc1, standard; gp3 IOPS and throughput above the free baseline; io1 IOPS; io2 IOPS in its three price tiers | Snapshots |
-| `aws_db_instance` | Instance hours for MySQL, PostgreSQL, MariaDB (Single-AZ and Multi-AZ); gp2, gp3, magnetic storage | Provisioned IOPS storage (io1/io2), gp3 IOPS and throughput above the baseline, backup storage, data transfer |
+| `aws_db_instance` | Instance hours for MySQL, PostgreSQL, MariaDB (Single-AZ and Multi-AZ); gp2, gp3, magnetic storage | Provisioned IOPS storage (io1/io2) and gp3 performance above the baseline (listed as not estimated), backup storage, data transfer |
 | `aws_nat_gateway` | Gateway hours | Data processing per GB |
 | `aws_lb` / `aws_alb` | Application, network and gateway load balancer hours | Capacity units (LCU) |
 
@@ -144,9 +168,17 @@ Running resources are priced for 730 hours a month, the figure AWS Pricing Calcu
 Prices are in USD before tax. Supported regions are all commercial AWS Regions; GovCloud (US) and China
 Regions are not supported by the Pricing Calculator API.
 
-A changed resource is listed under **Not estimated** when its type is not supported, when a value that
-decides its price (such as the instance type) is only known after apply, or when AWS returns no price
-for its usage.
+These are listed under **Not estimated**, with the resource and the reason:
+
+- AWS resources of a type the action does not support
+- Values that decide the price but are known only after apply, such as an instance type taken from
+  another resource, or a root volume whose size comes from the AMI
+- Parts of a supported resource the action cannot price, such as RDS io1 storage
+- Usage AWS returns no price for
+
+Charges that depend on usage (data transfer, LCU, NAT data processing) cannot be read from a plan.
+They are named in the comment's footnote instead. Resources of other providers, such as `random_id` or
+`null_resource`, cost nothing on AWS and are only counted in the footnote.
 
 ## How it compares with Infracost
 

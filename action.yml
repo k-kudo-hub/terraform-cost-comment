@@ -10,7 +10,7 @@ inputs:
     description: Path to the output of `terraform show -json <planfile>`.
     required: true
   aws-region:
-    description: Region the resources are created in. Read from the aws provider block in the plan when omitted.
+    description: Region the resources are created in. When omitted, read from the aws provider block in the plan, then from AWS_REGION or AWS_DEFAULT_REGION.
     required: false
     default: ""
   rate-type:
@@ -30,7 +30,7 @@ inputs:
     required: false
     default: "false"
   github-token:
-    description: Token used to comment on the pull request.
+    description: Token used to comment on the pull request. Use the default token or a GitHub App token; only comments posted by a bot are updated in place.
     required: false
     default: ${{ github.token }}
 
@@ -44,7 +44,7 @@ outputs:
   unexpected:
     description: '"true" when the increase exceeds the declared expectation, or cost increases with no expectation declared.'
   not-estimated-count:
-    description: Number of changed resources left out of the estimate.
+    description: Number of changes left out of the total (whole resources, and parts of estimated resources).
   region:
     description: Region used for pricing.
 

@@ -13,7 +13,7 @@ Terraform の plan で AWS の月額費用がどう変わるかを、AWS 公式�
 
 - PR の作成者は、想定する費用の変化を PR の説明に書きます（`cost-expectation: +50`）。コメントは、試算がその範囲に収まるか、どれだけ超えるかを示します
 - 費用が増えるのに想定が書かれていなければ、コメントはその増加が想定どおりかを問います
-- 試算できなかったリソースは黙って捨てずに一覧にします。合計を全体だと思い込まないためです
+- 試算できなかった変更は、黙って捨てずにリソースごとに並べます。合計を全体だと思い込まないためです
 
 ## 使う人
 
@@ -21,13 +21,24 @@ Terraform の plan で AWS の月額費用がどう変わるかを、AWS 公式�
 
 ## コメントの例（`language: ja`）
 
+PR の説明に `cost-expectation: +50` と書いたとき:
+
 ```markdown
 ### 💰 月額費用の変化: **+$1,346.60** /月
 
 > [!WARNING]
-> 想定した変化（+$50.00/月）より **$1,296.60/月 多く** なります。マージの前に、この増加が意図したものかを確かめてください。
+> 想定した変化（+$50.00/月）より **$1,296.60/月 多く** なります（試算できたリソースについて）。マージの前に、この増加が意図したものかを確かめてください。
 
-> ⚠️ 変更されるリソースのうち 1 件は、この合計に含まれていません。実際の変化はこれより大きくなることがあります。
+> [!CAUTION]
+> 1 件の変更がこの合計に含まれていません。実際の変化はこれより大きくなることがあります。
+
+| | 月額 |
+|---|---:|
+| 変更前 | $0.00 |
+| 変更後 | $1,346.60 |
+| 想定した変化 | +$50.00 |
+
+#### リソースごとの変化（増加の大きい順）
 
 | リソース | 操作 | 変更前 | 変更後 | 変化 |
 |---|---|---:|---:|---:|
@@ -37,15 +48,15 @@ Terraform の plan で AWS の月額費用がどう変わるかを、AWS 公式�
 | `aws_nat_gateway.main` | 作成 | $0.00 | $45.26 | **+$45.26** |
 | `aws_lb.app` | 作成 | $0.00 | $17.74 | **+$17.74** |
 
-#### ⚠️ 試算できなかったリソース（1 件）
+#### ⚠️ 試算できなかったもの（1 件）
 
-| リソース | 操作 | 理由 |
+| リソース | 操作 | 試算できなかったもの |
 |---|---|---|
 | `aws_s3_bucket.logs` | 作成 | resource type aws_s3_bucket is not supported |
 ```
 
+実際のコメントには、試算した使用量の内訳・試算に含まれないもの・試算の前提が、折りたたみで続きます。
 push のたびに同じコメントを書き換えるので、PR には最新の試算が1つだけ残ります。
-コメントの全文には、試算した使用量の内訳・試算に含めていないもの・試算の前提も載ります。
 
 ## 使い方
 
@@ -56,6 +67,11 @@ on:
   pull_request:
     # edited: PR の説明（cost-expectation）を書き換えたときに試算し直す
     types: [opened, synchronize, reopened, edited]
+
+# PR ごとに1つずつ動かし、push と説明の編集が重なってもコメントが2つにならないようにする
+concurrency:
+  group: terraform-cost-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -92,6 +108,9 @@ cost-expectation: +50
 
 単位は米ドル／月です。費用を下げる PR なら負の数（`cost-expectation: -20`）を書きます。
 
+フォークからの PR には読み取り専用のトークンしか渡らず、OIDC のトークンも渡らないため、上のワークフローが動くのは同じリポジトリのブランチからの PR です。
+plan に使うロールには読み取りの権限だけを与え、信頼ポリシーをこのリポジトリの PR に絞ってください（`token.actions.githubusercontent.com:sub` を `repo:OWNER/REPO:pull_request` にする）。
+
 ### IAM の権限
 
 `terraform plan` に要る権限に加えて、次の1つが必要です。この API は[追加料金なし](https://aws.amazon.com/about-aws/whats-new/2026/11/aws-pricing-calculator-api/)で使えます。
@@ -109,12 +128,12 @@ cost-expectation: +50
 | 名前 | 既定値 | 説明 |
 |---|---|---|
 | `plan-json` | （必須） | `terraform show -json <planfile>` の出力のパス |
-| `aws-region` | plan から読む | リソースを作るリージョン。省略すると `aws` プロバイダーの設定（定数か変数）から読む |
+| `aws-region` | 説明を参照 | リソースを作るリージョン。省略すると、plan の `aws` プロバイダーの設定（定数か変数）、次に環境変数 `AWS_REGION` と `AWS_DEFAULT_REGION`（`configure-aws-credentials` が設定する）から読む |
 | `rate-type` | `BEFORE_DISCOUNTS` | `BEFORE_DISCOUNTS`（公開のオンデマンド料金）・`AFTER_DISCOUNTS`・`AFTER_DISCOUNTS_AND_COMMITMENTS`。後ろの2つは Pricing Calculator の料金の設定で許可されている必要がある |
 | `language` | `en` | コメントの言語。`en` か `ja` |
 | `comment-tag` | （空） | 1つの PR で plan を複数回すとき（`prod` と `staging` など）に、plan ごとにコメントを分ける |
-| `fail-on-unexpected` | `false` | 増加が `cost-expectation` を超えたとき、または想定が書かれていないのに費用が増えたときに、ステップを失敗させる |
-| `github-token` | `${{ github.token }}` | コメントに使うトークン |
+| `fail-on-unexpected` | `false` | 試算した増加が `cost-expectation` を超えたとき、または想定が書かれていないのに費用が増えたときに、ステップを失敗させる |
+| `github-token` | `${{ github.token }}` | コメントに使うトークン。既定のトークンか GitHub App のトークンを使う。このアクションはボットが投稿したコメントだけを書き換えるため、個人のトークンでは毎回新しいコメントになる |
 
 ### 出力
 
@@ -122,30 +141,36 @@ cost-expectation: +50
 |---|---|
 | `monthly-delta` | 月額費用の変化の試算（米ドル。下がるときは負の数） |
 | `monthly-before` / `monthly-after` | 試算できたリソースの、変更前と変更後の月額 |
-| `unexpected` | 増加が想定を超えたとき、または想定が書かれていないのに費用が増えたときに `true` |
-| `not-estimated-count` | 変更されるリソースのうち、試算に含めなかったものの数 |
+| `unexpected` | 試算した増加が想定を超えたとき、または想定が書かれていないのに費用が増えたときに `true` |
+| `not-estimated-count` | 合計に含まれなかった変更の数（リソースごと試算できなかったものと、試算できたリソースの一部） |
 | `region` | 試算に使ったリージョン |
+
+`unexpected` と `fail-on-unexpected` が判定するのは、試算できた金額だけです。試算できなかった変更があるときに止めたいなら、後のステップで `not-estimated-count` を確かめてください。
 
 PR 以外のイベントでは、ジョブのサマリーにだけ書き出します。
 
 ## 試算するもの
 
-| リソース | 試算するもの | 含めないもの |
+| リソース | 試算するもの | 試算しないもの |
 |---|---|---|
-| `aws_instance` | インスタンスの稼働時間（Linux・オンデマンド・共有テナンシー）、plan の時点でサイズと種類が分かるルートボリュームと追加の EBS ボリューム | Linux 以外の OS のライセンス、データ転送 |
+| `aws_instance` | インスタンスの稼働時間（Linux・オンデマンド・共有テナンシー）、ルートボリュームと追加の EBS ボリューム | Linux 以外の OS のライセンス、データ転送 |
 | `aws_ebs_volume` | gp2・gp3・io1・io2・st1・sc1・standard のストレージ、gp3 の無料枠を超える IOPS とスループット、io1 の IOPS、io2 の IOPS（3段階の料金） | スナップショット |
-| `aws_db_instance` | MySQL・PostgreSQL・MariaDB のインスタンスの稼働時間（シングル AZ とマルチ AZ）、gp2・gp3・マグネティックのストレージ | プロビジョンド IOPS のストレージ（io1・io2）、gp3 の基準を超える IOPS とスループット、バックアップのストレージ、データ転送 |
+| `aws_db_instance` | MySQL・PostgreSQL・MariaDB のインスタンスの稼働時間（シングル AZ とマルチ AZ）、gp2・gp3・マグネティックのストレージ | プロビジョンド IOPS のストレージ（io1・io2）と gp3 の基準を超える性能（「試算できなかったもの」に並ぶ）、バックアップのストレージ、データ転送 |
 | `aws_nat_gateway` | ゲートウェイの稼働時間 | データ処理量（GB 単位） |
 | `aws_lb` / `aws_alb` | Application・Network・Gateway の各ロードバランサーの稼働時間 | キャパシティユニット（LCU） |
 
 稼働し続けるリソースは、AWS Pricing Calculator と同じく月730時間として試算します。料金は米ドル・税抜きです。
 対応リージョンは AWS の商用リージョンすべてで、GovCloud (US) と中国のリージョンは Pricing Calculator API が対応していません。
 
-次のどれかに当たる変更は、「試算できなかったリソース」に並びます。
+次のものは、リソースと理由をつけて「試算できなかったもの」に並びます。
 
-- リソースの種類に対応していない
-- 料金を決める値（インスタンスタイプなど）が apply するまで分からない
-- AWS がその使用量の料金を返さなかった
+- 対応していない種類の AWS リソース
+- 料金を決める値のうち、apply するまで分からないもの（ほかのリソースから受け取るインスタンスタイプ、AMI で決まるルートボリュームのサイズ）
+- 対応しているリソースのうち、試算できない部分（RDS の io1 ストレージ）
+- AWS が料金を返さなかった使用量
+
+使用量で決まる料金（データ転送・LCU・NAT のデータ処理）は plan から読めないため、コメントの注記に名前だけを書きます。
+AWS 以外のプロバイダーのリソース（`random_id`・`null_resource` など）は AWS の費用がかからないため、注記で件数だけを示します。
 
 ## Infracost との違い
 

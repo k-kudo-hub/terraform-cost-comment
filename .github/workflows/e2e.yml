@@ -1,8 +1,9 @@
 name: End-to-end
 
 # Runs this action against e2e/main.tf on pull requests and comments the estimate.
-# Needs the repository variable AWS_E2E_ROLE_ARN: a role that GitHub OIDC can assume for pull
-# requests of this repository and that may call bcm-pricing-calculator:GetUsageLinesEstimatedCost.
+# Needs the repository secret AWS_E2E_ROLE_ARN (a secret, so the account ID is masked in logs):
+# a role that GitHub OIDC can assume for pull requests of this repository and that may call
+# bcm-pricing-calculator:GetUsageLinesEstimatedCost.
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
@@ -34,7 +35,7 @@ jobs:
           terraform show -json tfplan > plan.json
       - uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ vars.AWS_E2E_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_E2E_ROLE_ARN }}
           aws-region: ap-northeast-1
           # Keep the account ID out of the logs once the repository is public.
           mask-aws-account-id: true

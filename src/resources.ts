@@ -134,7 +134,7 @@ const ebsVolume: Estimator = (attrs, unknown, prefix) => {
     prefix,
   );
   if (typeof lines === "string") return unestimable(lines);
-  return { lines, excluded: ["snapshots"] };
+  return { lines, excluded: ["EBS snapshots"] };
 };
 
 // ---------------------------------------------------------------- EC2
@@ -177,7 +177,7 @@ const instance: Estimator = (attrs, unknown, prefix) => {
       else lines.push(...result);
     });
   }
-  excluded.push("operating system license other than Linux", "data transfer");
+  excluded.push("EC2 operating system licenses other than Linux", "data transfer");
   return { lines, excluded };
 };
 
@@ -222,11 +222,11 @@ const dbInstance: Estimator = (attrs, unknown, prefix) => {
     : num(attrs, "allocated_storage");
   const storage = storageType === undefined ? undefined : RDS_STORAGE[storageType];
   if (size === undefined) {
-    excluded.push("storage (size is not known until apply)");
+    excluded.push("RDS storage (size is not known until apply)");
   } else if (storageType === undefined) {
-    excluded.push("storage (type is not known until apply)");
+    excluded.push("RDS storage (type is not known until apply)");
   } else if (storage === undefined) {
-    excluded.push(`${storageType} storage and provisioned IOPS`);
+    excluded.push(`RDS ${storageType} storage and provisioned IOPS`);
   } else {
     lines.push({
       serviceCode: "AmazonRDS",
@@ -236,8 +236,8 @@ const dbInstance: Estimator = (attrs, unknown, prefix) => {
       description: `${storageType} storage ${size} GB`,
     });
   }
-  if (storageType === "gp3") excluded.push("gp3 IOPS and throughput above the baseline");
-  excluded.push("backups beyond the free allowance", "data transfer");
+  if (storageType === "gp3") excluded.push("RDS gp3 IOPS and throughput above the baseline");
+  excluded.push("RDS backup storage beyond the free allowance", "data transfer");
   return { lines, excluded };
 };
 
@@ -253,7 +253,7 @@ const natGateway: Estimator = (_attrs, _unknown, prefix) => ({
       description: `NAT gateway (${HOURS_PER_MONTH} h)`,
     },
   ],
-  excluded: ["data processing (per GB)"],
+  excluded: ["NAT gateway data processing (per GB)"],
 });
 
 const LB_OPERATIONS: Readonly<Record<string, string>> = {
@@ -276,7 +276,7 @@ const loadBalancer: Estimator = (attrs, _unknown, prefix) => {
         description: `${type} load balancer (${HOURS_PER_MONTH} h)`,
       },
     ],
-    excluded: ["LCU (capacity units, depends on traffic)"],
+    excluded: ["load balancer capacity units (LCU, depend on traffic)"],
   };
 };
 

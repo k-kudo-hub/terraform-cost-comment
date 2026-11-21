@@ -55968,7 +55968,7 @@ var ebsVolume = (attrs, unknown, prefix) => {
     prefix
   );
   if (typeof lines === "string") return unestimable(lines);
-  return { lines, excluded: ["snapshots"] };
+  return { lines, excluded: ["EBS snapshots"] };
 };
 var instance = (attrs, unknown, prefix) => {
   const type = str(attrs, "instance_type");
@@ -56008,7 +56008,7 @@ var instance = (attrs, unknown, prefix) => {
       else lines.push(...result);
     });
   }
-  excluded.push("operating system license other than Linux", "data transfer");
+  excluded.push("EC2 operating system licenses other than Linux", "data transfer");
   return { lines, excluded };
 };
 var RDS_ENGINES = {
@@ -56045,11 +56045,11 @@ var dbInstance = (attrs, unknown, prefix) => {
   const size = isUnknown(unknown, "allocated_storage") ? void 0 : num(attrs, "allocated_storage");
   const storage = storageType === void 0 ? void 0 : RDS_STORAGE[storageType];
   if (size === void 0) {
-    excluded.push("storage (size is not known until apply)");
+    excluded.push("RDS storage (size is not known until apply)");
   } else if (storageType === void 0) {
-    excluded.push("storage (type is not known until apply)");
+    excluded.push("RDS storage (type is not known until apply)");
   } else if (storage === void 0) {
-    excluded.push(`${storageType} storage and provisioned IOPS`);
+    excluded.push(`RDS ${storageType} storage and provisioned IOPS`);
   } else {
     lines.push({
       serviceCode: "AmazonRDS",
@@ -56059,8 +56059,8 @@ var dbInstance = (attrs, unknown, prefix) => {
       description: `${storageType} storage ${size} GB`
     });
   }
-  if (storageType === "gp3") excluded.push("gp3 IOPS and throughput above the baseline");
-  excluded.push("backups beyond the free allowance", "data transfer");
+  if (storageType === "gp3") excluded.push("RDS gp3 IOPS and throughput above the baseline");
+  excluded.push("RDS backup storage beyond the free allowance", "data transfer");
   return { lines, excluded };
 };
 var natGateway = (_attrs, _unknown, prefix) => ({
@@ -56073,7 +56073,7 @@ var natGateway = (_attrs, _unknown, prefix) => ({
       description: `NAT gateway (${HOURS_PER_MONTH} h)`
     }
   ],
-  excluded: ["data processing (per GB)"]
+  excluded: ["NAT gateway data processing (per GB)"]
 });
 var LB_OPERATIONS = {
   application: "LoadBalancing:Application",
@@ -56094,7 +56094,7 @@ var loadBalancer = (attrs, _unknown, prefix) => {
         description: `${type} load balancer (${HOURS_PER_MONTH} h)`
       }
     ],
-    excluded: ["LCU (capacity units, depends on traffic)"]
+    excluded: ["load balancer capacity units (LCU, depend on traffic)"]
   };
 };
 var ESTIMATORS = {
@@ -56128,7 +56128,7 @@ function judge(delta, expected) {
 function isUnexpected(verdict) {
   return verdict.kind === "exceeded" || verdict.kind === "undeclared";
 }
-var money = (n3) => `$${Math.abs(n3).toFixed(2)}`;
+var money = (n3) => `$${Math.abs(n3).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 var signed = (n3) => `${n3 > 0 ? "+" : n3 < 0 ? "-" : "\xB1"}${money(n3)}`;
 var cell = (s2) => s2.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 var EN = {
@@ -56155,7 +56155,8 @@ var EN = {
   notEstimatedTitle: (n3) => `#### \u26A0\uFE0F Not estimated (${n3})`,
   notEstimatedColumns: ["Resource", "Action", "Why"],
   leftOutTitle: "What the estimate leaves out",
-  leftOutIntro: "Usage-based charges cannot be read from the plan, so they are not included:",
+  leftOutIntro: "Not included in the estimate:",
+  assumptionsIntro: "Assumptions:",
   assumptions: (ctx) => [
     `Prices from the AWS Pricing Calculator API (rate type \`${ctx.rateType}\`), USD, before tax.`,
     `Region \`${ctx.region}\`. Running resources are priced for ${HOURS_PER_MONTH} hours a month; EC2 instances as Linux on-demand.`
@@ -56187,7 +56188,8 @@ var JA = {
   notEstimatedTitle: (n3) => `#### \u26A0\uFE0F \u8A66\u7B97\u3067\u304D\u306A\u304B\u3063\u305F\u30EA\u30BD\u30FC\u30B9\uFF08${n3} \u4EF6\uFF09`,
   notEstimatedColumns: ["\u30EA\u30BD\u30FC\u30B9", "\u64CD\u4F5C", "\u7406\u7531"],
   leftOutTitle: "\u8A66\u7B97\u306B\u542B\u307E\u308C\u306A\u3044\u3082\u306E",
-  leftOutIntro: "\u4F7F\u7528\u91CF\u3067\u6C7A\u307E\u308B\u6599\u91D1\u306F plan \u304B\u3089\u8AAD\u3081\u306A\u3044\u305F\u3081\u3001\u542B\u3081\u3066\u3044\u307E\u305B\u3093\u3002",
+  leftOutIntro: "\u8A66\u7B97\u306B\u542B\u3081\u3066\u3044\u306A\u3044\u3082\u306E:",
+  assumptionsIntro: "\u8A66\u7B97\u306E\u524D\u63D0:",
   assumptions: (ctx) => [
     `\u6599\u91D1\u306F AWS Pricing Calculator \u306E API\uFF08\u6599\u91D1\u306E\u7A2E\u985E \`${ctx.rateType}\`\uFF09\u306B\u3088\u308B\u3002\u7C73\u30C9\u30EB\u30FB\u7A0E\u629C\u304D\u3002`,
     `\u30EA\u30FC\u30B8\u30E7\u30F3\u306F \`${ctx.region}\`\u3002\u7A3C\u50CD\u3057\u7D9A\u3051\u308B\u30EA\u30BD\u30FC\u30B9\u306F\u6708 ${HOURS_PER_MONTH} \u6642\u9593\u3001EC2 \u30A4\u30F3\u30B9\u30BF\u30F3\u30B9\u306F Linux \u306E\u30AA\u30F3\u30C7\u30DE\u30F3\u30C9\u3068\u3057\u3066\u8A66\u7B97\u3002`
@@ -56256,7 +56258,7 @@ function renderComment(estimate, expected, ctx) {
   const leftOut = [...new Set(estimate.resources.flatMap((r5) => r5.excluded))];
   out.push("", `<details><summary>${m3.leftOutTitle}</summary>`, "");
   if (leftOut.length > 0) out.push(m3.leftOutIntro, "", ...leftOut.map((x) => `- ${x}`), "");
-  out.push(...m3.assumptions(ctx).map((x) => `- ${x}`), "", "</details>");
+  out.push(m3.assumptionsIntro, "", ...m3.assumptions(ctx).map((x) => `- ${x}`), "", "</details>");
   if (expected === void 0) out.push("", `<sub>${m3.howToDeclare}</sub>`);
   return `${out.join("\n")}
 `;

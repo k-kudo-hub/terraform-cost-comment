@@ -19,7 +19,7 @@ const resource = (over: Partial<ResourceEstimate>): ResourceEstimate => ({
       cost: 45.26,
     },
   ],
-  excluded: ["data processing (per GB)"],
+  excluded: ["NAT gateway data processing (per GB)"],
   ...over,
 });
 
@@ -115,7 +115,7 @@ describe("renderComment", () => {
 
   it("lists what the estimate leaves out and the assumptions", () => {
     const body = renderComment(estimate(), 50, { ...ctx, language: "en" });
-    expect(body).toContain("data processing (per GB)");
+    expect(body).toContain("NAT gateway data processing (per GB)");
     expect(body).toContain("730");
     expect(body).toContain("ap-northeast-1");
   });
@@ -128,6 +128,14 @@ describe("renderComment", () => {
     );
     expect(body).toContain("$0.00");
     expect(body).not.toContain("| Resource |");
+  });
+
+  it("separates thousands in amounts", () => {
+    const body = renderComment(estimate({ totalAfter: 1346.6, totalDelta: 1346.6 }), undefined, {
+      ...ctx,
+      language: "en",
+    });
+    expect(body).toContain("+$1,346.60");
   });
 
   it("writes Japanese when asked", () => {

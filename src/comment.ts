@@ -45,7 +45,8 @@ export function isUnexpected(verdict: Verdict): boolean {
   return verdict.kind === "exceeded" || verdict.kind === "undeclared";
 }
 
-const money = (n: number) => `$${Math.abs(n).toFixed(2)}`;
+const money = (n: number) =>
+  `$${Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const signed = (n: number) => `${n > 0 ? "+" : n < 0 ? "-" : "±"}${money(n)}`;
 const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 
@@ -62,6 +63,7 @@ interface Messages {
   notEstimatedColumns: [string, string, string];
   leftOutTitle: string;
   leftOutIntro: string;
+  assumptionsIntro: string;
   assumptions: (ctx: RenderContext) => string[];
   howToDeclare: string;
   noChange: string;
@@ -91,7 +93,8 @@ const EN: Messages = {
   notEstimatedTitle: (n) => `#### ⚠️ Not estimated (${n})`,
   notEstimatedColumns: ["Resource", "Action", "Why"],
   leftOutTitle: "What the estimate leaves out",
-  leftOutIntro: "Usage-based charges cannot be read from the plan, so they are not included:",
+  leftOutIntro: "Not included in the estimate:",
+  assumptionsIntro: "Assumptions:",
   assumptions: (ctx) => [
     `Prices from the AWS Pricing Calculator API (rate type \`${ctx.rateType}\`), USD, before tax.`,
     `Region \`${ctx.region}\`. Running resources are priced for ${HOURS_PER_MONTH} hours a month; EC2 instances as Linux on-demand.`,
@@ -125,7 +128,8 @@ const JA: Messages = {
   notEstimatedTitle: (n) => `#### ⚠️ 試算できなかったリソース（${n} 件）`,
   notEstimatedColumns: ["リソース", "操作", "理由"],
   leftOutTitle: "試算に含まれないもの",
-  leftOutIntro: "使用量で決まる料金は plan から読めないため、含めていません。",
+  leftOutIntro: "試算に含めていないもの:",
+  assumptionsIntro: "試算の前提:",
   assumptions: (ctx) => [
     `料金は AWS Pricing Calculator の API（料金の種類 \`${ctx.rateType}\`）による。米ドル・税抜き。`,
     `リージョンは \`${ctx.region}\`。稼働し続けるリソースは月 ${HOURS_PER_MONTH} 時間、EC2 インスタンスは Linux のオンデマンドとして試算。`,
@@ -207,7 +211,7 @@ export function renderComment(
   const leftOut = [...new Set(estimate.resources.flatMap((r) => r.excluded))];
   out.push("", `<details><summary>${m.leftOutTitle}</summary>`, "");
   if (leftOut.length > 0) out.push(m.leftOutIntro, "", ...leftOut.map((x) => `- ${x}`), "");
-  out.push(...m.assumptions(ctx).map((x) => `- ${x}`), "", "</details>");
+  out.push(m.assumptionsIntro, "", ...m.assumptions(ctx).map((x) => `- ${x}`), "", "</details>");
 
   if (expected === undefined) out.push("", `<sub>${m.howToDeclare}</sub>`);
   return `${out.join("\n")}\n`;

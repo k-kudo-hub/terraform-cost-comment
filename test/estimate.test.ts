@@ -170,7 +170,7 @@ describe("estimatePlan", () => {
       "us-east-1",
       pricer,
     );
-    expect(r.resources[0]?.excluded).toContain("data processing (per GB)");
+    expect(r.resources[0]?.excluded).toContain("NAT gateway data processing (per GB)");
   });
 });
 

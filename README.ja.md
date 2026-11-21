@@ -153,20 +153,32 @@ PR 以外のイベントでは、ジョブのサマリーにだけ書き出し�
 
 | リソース | 試算するもの | 試算しないもの |
 |---|---|---|
-| `aws_instance` | インスタンスの稼働時間（Linux・オンデマンド・共有テナンシー）、ルートボリュームと追加の EBS ボリューム | Linux 以外の OS のライセンス、データ転送 |
+| `aws_instance` | インスタンスの稼働時間（Linux・オンデマンド・共有テナンシー）、ルートボリュームと追加の EBS ボリューム、`associate_public_ip_address = true` のときのパブリック IPv4 アドレス | Linux 以外の OS のライセンス、データ転送 |
 | `aws_ebs_volume` | gp2・gp3・io1・io2・st1・sc1・standard のストレージ、gp3 の無料枠を超える IOPS とスループット、io1 の IOPS、io2 の IOPS（3段階の料金） | スナップショット |
-| `aws_db_instance` | MySQL・PostgreSQL・MariaDB のインスタンスの稼働時間（シングル AZ とマルチ AZ）、gp2・gp3・マグネティックのストレージ | プロビジョンド IOPS のストレージ（io1・io2）と gp3 の基準を超える性能（「試算できなかったもの」に並ぶ）、バックアップのストレージ、データ転送 |
+| `aws_db_instance` | MySQL・PostgreSQL・MariaDB のインスタンスの稼働時間（シングル AZ とマルチ AZ）、gp2・gp3・io1・io2・マグネティックのストレージ、io1 と io2 のプロビジョンド IOPS | gp3 の基準を超える性能（「試算できなかったもの」に並ぶ）、バックアップのストレージ、データ転送 |
+| `aws_rds_cluster_instance` | Aurora MySQL と Aurora PostgreSQL のインスタンスの稼働時間（クラスターに合わせて Standard か I/O-Optimized の単価） | Aurora Serverless v2（「試算できなかったもの」に並ぶ） |
+| `aws_rds_cluster` | なし（インスタンスは `aws_rds_cluster_instance` として試算する） | Aurora のストレージと I/O、バックアップのストレージ |
+| `aws_elasticache_cluster` | Redis・Valkey・Memcached のノードの稼働時間（レプリケーショングループの一員はグループの側で試算する） | バックアップのストレージ、データ転送 |
+| `aws_elasticache_replication_group` | すべてのノードの稼働時間（`num_cache_clusters`、またはシャード数 ×（レプリカ数 + 1）） | バックアップのストレージ、データ転送 |
+| `aws_eks_cluster` | クラスターの稼働時間 | 延長サポートの追加料金、ワーカーノード（それぞれのリソースとして試算する） |
+| `aws_opensearch_domain` / `aws_elasticsearch_domain` | データノードと専用マスターノードの稼働時間、データノードごとの gp2・gp3・io1・マグネティックのストレージ、io1 の IOPS | UltraWarm ノードと gp3 の基準を超える性能（「試算できなかったもの」に並ぶ）、スナップショット、データ転送 |
 | `aws_nat_gateway` | ゲートウェイの稼働時間 | データ処理量（GB 単位） |
+| `aws_eip` | パブリック IPv4 アドレスの時間 | |
+| `aws_vpc_endpoint` | インターフェイス型エンドポイントのサブネットごとの稼働時間、Gateway Load Balancer 型エンドポイントの稼働時間（ゲートウェイ型は時間料金なし） | データ処理量（GB 単位） |
 | `aws_lb` / `aws_alb` | Application・Network・Gateway の各ロードバランサーの稼働時間 | キャパシティユニット（LCU） |
 
 稼働し続けるリソースは、AWS Pricing Calculator と同じく月730時間として試算します。料金は米ドル・税抜きです。
 対応リージョンは AWS の商用リージョンすべてで、GovCloud (US) と中国のリージョンは Pricing Calculator API が対応していません。
 
+設定に書かれていない属性には既定値を使います。EBS ボリュームは gp2（EC2 の API）、RDS のストレージは `iops` があれば io1、なければ gp3（RDS の API）、レプリケーショングループは Redis の1ノード（プロバイダーの文書）です。
+RDS の API にはマルチ AZ の既定値が書かれていないため、`multi_az` のないインスタンスはシングル AZ として試算し、そう仮定したことをコメントに書きます。
+
 次のものは、リソースと理由をつけて「試算できなかったもの」に並びます。
 
 - 対応していない種類の AWS リソース
 - 料金を決める値のうち、apply するまで分からないもの（ほかのリソースから受け取るインスタンスタイプ、AMI で決まるルートボリュームのサイズ）
-- 対応しているリソースのうち、試算できない部分（RDS の io1 ストレージ）
+- 対応しているリソースのうち、試算できない部分（UltraWarm ノード）
+- クラスターが plan にない Aurora のインスタンス（Standard の単価で試算し、I/O-Optimized のクラスターなら高くなることを書く）
 - AWS が料金を返さなかった使用量
 
 使用量で決まる料金（データ転送・LCU・NAT のデータ処理）は plan から読めないため、コメントの注記に名前だけを書きます。

@@ -62,11 +62,19 @@ describe("aws_elasticache_cluster", () => {
     expect(v.lines[0]?.operation).toBe("CreateCacheCluster:Valkey");
   });
 
-  it("leaves a member of a replication group to the group, so it is not counted twice", () => {
+  it("lists a read replica added to a replication group as not estimated", () => {
     const r = usage("aws_elasticache_cluster", { replication_group_id: "rg-1" });
-    expect(r.lines).toEqual([]);
-    expect(r.unestimable).toBeUndefined();
-    expect(r.partial).toEqual([]);
+    expect(r.unestimable).toContain("read replica added to replication group rg-1");
+  });
+
+  it("cannot estimate when replication group membership is not known until apply", () => {
+    const r = usage(
+      "aws_elasticache_cluster",
+      { engine: "redis", node_type: "cache.t3.micro", num_cache_nodes: 1 },
+      TOKYO,
+      { replication_group_id: true },
+    );
+    expect(r.unestimable).toContain("membership");
   });
 
   it("cannot estimate a node type that is not known until apply", () => {
@@ -432,5 +440,72 @@ describe("attributes left out of the configuration take their defaults", () => {
     expect(rows(r)).toEqual([
       ["AmazonElastiCache", "APN1-NodeUsage:cache.t3.micro", "CreateCacheCluster:0002", 730],
     ]);
+  });
+});
+
+describe("fixes from the review of the added resources", () => {
+  const configured = (...keys: string[]) => ({ configured: new Set(keys) });
+
+  it("lists a Multi-AZ DB cluster as not estimated instead of dropping it", () => {
+    const r = usage("aws_rds_cluster", {
+      engine: "mysql",
+      db_cluster_instance_class: "db.m6gd.large",
+      allocated_storage: 100,
+      storage_type: "io1",
+      iops: 1000,
+    });
+    expect(r.unestimable).toBe("Multi-AZ DB clusters are not supported");
+  });
+
+  it("does not assume gp3 when iops is written but known only after apply", () => {
+    const r = usage(
+      "aws_db_instance",
+      { engine: "mysql", instance_class: "db.m5.large", allocated_storage: 100 },
+      TOKYO,
+      { storage_type: true, iops: true, multi_az: true },
+      configured("engine", "instance_class", "allocated_storage", "iops"),
+    );
+    expect(r.partial).toEqual(["storage type is not known until apply"]);
+  });
+
+  it("reports OpenSearch EBS storage and master nodes that are known only after apply", () => {
+    const r = usage(
+      "aws_opensearch_domain",
+      {
+        cluster_config: [{ instance_type: "r6g.large.search", instance_count: 1 }],
+        ebs_options: [{}],
+      },
+      TOKYO,
+      {
+        cluster_config: [{ dedicated_master_enabled: true }],
+        ebs_options: [{ ebs_enabled: true }],
+      },
+    );
+    expect(r.partial).toEqual([
+      "dedicated master nodes are not known until apply",
+      "EBS storage is not known until apply",
+    ]);
+  });
+
+  it("cannot estimate an OpenSearch domain without an instance type", () => {
+    expect(usage("aws_opensearch_domain", {}).unestimable).toBeDefined();
+  });
+
+  it("names the public IPv4 address an instance may get from its subnet", () => {
+    const r = usage("aws_instance", { instance_type: "t3.micro" }, TOKYO, {
+      associate_public_ip_address: true,
+    });
+    expect(r.excluded).toContain("EC2 public IPv4 address when the subnet assigns one");
+  });
+
+  it("counts one shard when only replicas_per_node_group is set", () => {
+    const r = usage(
+      "aws_elasticache_replication_group",
+      { node_type: "cache.r6g.large", replicas_per_node_group: 2 },
+      TOKYO,
+      { engine: true, num_cache_clusters: true, num_node_groups: true },
+      configured("replication_group_id", "description", "node_type", "replicas_per_node_group"),
+    );
+    expect(r.lines[0]?.amount).toBe(730 * 3);
   });
 });

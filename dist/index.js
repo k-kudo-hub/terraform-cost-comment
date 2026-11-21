@@ -56043,14 +56043,13 @@ var instance = (attrs, unknown, prefix, env2) => {
       if (result.unestimable !== void 0) partial.push(result.unestimable);
     });
   }
+  const excluded = ["EC2 operating system licenses other than Linux", "data transfer"];
   if (attrs.associate_public_ip_address === true) {
     lines.push(publicIpv4(env2, "public IPv4 address"));
+  } else if (isUnknown(unknown, "associate_public_ip_address")) {
+    excluded.push("EC2 public IPv4 address when the subnet assigns one");
   }
-  return {
-    lines,
-    partial,
-    excluded: ["EC2 operating system licenses other than Linux", "data transfer"]
-  };
+  return { lines, partial, excluded };
 };
 var RDS_ENGINES = {
   mysql: "CreateDBInstance:0002",
@@ -56099,7 +56098,9 @@ var dbInstance = (attrs, unknown, prefix, env2) => {
   const partial = [];
   const excluded = [];
   const setType = readSet(str, attrs, unknown, "storage_type", env2);
-  const storageType = setType !== void 0 ? setType : typeof attrs.iops === "number" ? "io1" : "gp3";
+  const iopsWritten = typeof attrs.iops === "number" || env2.context.configured?.has("iops") === true;
+  const iopsKnown = typeof attrs.iops === "number";
+  const storageType = setType !== void 0 ? setType : iopsWritten ? iopsKnown ? "io1" : "unknown" : "gp3";
   const size = read(num, attrs, unknown, "allocated_storage");
   if (size === void 0 || size === "unknown") {
     partial.push("storage size is not known until apply");
@@ -56251,8 +56252,13 @@ function cacheNodes(engine, nodeType, nodes5, prefix) {
 }
 var elasticacheCluster = (attrs, unknown, prefix, env2) => {
   const group4 = readSet(str, attrs, unknown, "replication_group_id", env2);
+  if (group4 === "unknown") {
+    return unestimable("replication group membership is not known until apply");
+  }
   if (group4 !== void 0) {
-    return { lines: [], partial: [], excluded: [] };
+    return unestimable(
+      `read replica added to replication group ${group4}; its node type comes from the group`
+    );
   }
   if (isUnknown(unknown, "engine")) return unestimable("engine is not known until apply");
   const nodes5 = read(num, attrs, unknown, "num_cache_nodes");
@@ -56273,7 +56279,9 @@ var elasticacheReplicationGroup = (attrs, unknown, prefix, env2) => {
   const setClusters = readSet(num, attrs, unknown, "num_cache_clusters", env2);
   const clusters = setClusters === void 0 && shards === void 0 && replicas === void 0 ? 1 : setClusters;
   let nodes5;
-  if (typeof shards === "number" && shards > 1) {
+  if (shards === void 0 && typeof replicas === "number" && setClusters === void 0) {
+    nodes5 = replicas + 1;
+  } else if (typeof shards === "number" && shards > 1) {
     nodes5 = typeof replicas === "number" ? shards * (replicas + 1) : void 0;
   } else if (typeof clusters === "number") {
     nodes5 = clusters;
@@ -56296,7 +56304,12 @@ var AURORA_USAGE_EXCLUDED = [
   "Aurora storage and I/O (depend on usage)",
   "Aurora backup storage beyond the free allowance"
 ];
-var rdsCluster = (attrs) => {
+var rdsCluster = (attrs, unknown) => {
+  const engine = str(attrs, "engine");
+  if (isUnknown(unknown, "engine")) return unestimable("engine is not known until apply");
+  if (engine !== void 0 && !engine.startsWith("aurora") || str(attrs, "db_cluster_instance_class") !== void 0 || isUnknown(unknown, "db_cluster_instance_class")) {
+    return unestimable("Multi-AZ DB clusters are not supported");
+  }
   const mode = str(attrs, "engine_mode");
   if (mode !== void 0 && mode !== "provisioned") {
     return unestimable(`engine mode "${mode}" is not supported`);
@@ -56359,13 +56372,14 @@ var OPENSEARCH_STORAGE = {
   standard: "ES:Magnetic-Storage"
 };
 var searchInstance = (type) => type.replace(/\.(search|elasticsearch)$/, "");
-var openSearchDomain = (attrs, unknown, prefix) => {
+var openSearchDomain = (attrs, unknown, prefix, env2) => {
   const cluster = blocks(attrs, "cluster_config")[0] ?? {};
   const cu = blockUnknown(unknown, "cluster_config", 0);
   if (isUnknown(unknown, "cluster_config") || cu.instance_type === true) {
     return unestimable("instance type is not known until apply");
   }
-  const type = str(cluster, "instance_type") ?? "r5.large.search";
+  const type = str(cluster, "instance_type");
+  if (type === void 0) return unestimable("instance type is not set in cluster_config");
   const count = cu.instance_count === true ? void 0 : num(cluster, "instance_count") ?? 1;
   if (count === void 0) return unestimable("number of instances is not known until apply");
   const line = (usageType, amount, description) => ({
@@ -56383,7 +56397,9 @@ var openSearchDomain = (attrs, unknown, prefix) => {
     )
   ];
   const partial = [];
-  if (cluster.dedicated_master_enabled === true) {
+  if (cu.dedicated_master_enabled === true) {
+    partial.push("dedicated master nodes are not known until apply");
+  } else if (cluster.dedicated_master_enabled === true) {
     const masterType = str(cluster, "dedicated_master_type");
     const masters = num(cluster, "dedicated_master_count");
     if (masterType === void 0 || masters === void 0) {
@@ -56401,7 +56417,10 @@ var openSearchDomain = (attrs, unknown, prefix) => {
   if (cluster.warm_enabled === true) partial.push("UltraWarm nodes are not supported");
   const ebs = blocks(attrs, "ebs_options")[0];
   const eu = blockUnknown(unknown, "ebs_options", 0);
-  if (ebs !== void 0 && ebs.ebs_enabled === true) {
+  const ebsUnknown = eu.ebs_enabled === true || isUnknown(unknown, "ebs_options") && env2.context.configured?.has("ebs_options") !== false;
+  if (ebsUnknown) {
+    partial.push("EBS storage is not known until apply");
+  } else if (ebs !== void 0 && ebs.ebs_enabled === true) {
     const volumeType = eu.volume_type === true ? void 0 : str(ebs, "volume_type") ?? "gp2";
     const size = eu.volume_size === true ? void 0 : num(ebs, "volume_size");
     const storage = volumeType === void 0 ? void 0 : OPENSEARCH_STORAGE[volumeType];

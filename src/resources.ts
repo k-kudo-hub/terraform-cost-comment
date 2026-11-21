@@ -265,14 +265,13 @@ const instance: Estimator = (attrs, unknown, prefix, env) => {
     });
   }
   // Only an explicit request: left unset, the subnet decides and the plan cannot tell.
+  const excluded = ["EC2 operating system licenses other than Linux", "data transfer"];
   if (attrs.associate_public_ip_address === true) {
     lines.push(publicIpv4(env, "public IPv4 address"));
+  } else if (isUnknown(unknown, "associate_public_ip_address")) {
+    excluded.push("EC2 public IPv4 address when the subnet assigns one");
   }
-  return {
-    lines,
-    partial,
-    excluded: ["EC2 operating system licenses other than Linux", "data transfer"],
-  };
+  return { lines, partial, excluded };
 };
 
 // ---------------------------------------------------------------- RDS
@@ -337,8 +336,12 @@ const dbInstance: Estimator = (attrs, unknown, prefix, env) => {
   const excluded: string[] = [];
   // Default per the RDS CreateDBInstance API reference: io1 with Iops, otherwise gp3.
   const setType = readSet(str, attrs, unknown, "storage_type", env);
+  // The default depends on whether Iops is specified, i.e. written in the configuration.
+  const iopsWritten =
+    typeof attrs.iops === "number" || env.context.configured?.has("iops") === true;
+  const iopsKnown = typeof attrs.iops === "number";
   const storageType =
-    setType !== undefined ? setType : typeof attrs.iops === "number" ? "io1" : "gp3";
+    setType !== undefined ? setType : iopsWritten ? (iopsKnown ? "io1" : "unknown") : "gp3";
   const size = read(num, attrs, unknown, "allocated_storage");
   if (size === undefined || size === "unknown") {
     partial.push("storage size is not known until apply");
@@ -520,9 +523,16 @@ function cacheNodes(
 
 const elasticacheCluster: Estimator = (attrs, unknown, prefix, env) => {
   // A member of a replication group is priced with the group.
+  // With replication_group_id the cluster adds a read replica to the group: one more node that
+  // the group's num_cache_clusters does not count, whose node type comes from the group.
   const group = readSet(str, attrs, unknown, "replication_group_id", env);
+  if (group === "unknown") {
+    return unestimable("replication group membership is not known until apply");
+  }
   if (group !== undefined) {
-    return { lines: [], partial: [], excluded: [] };
+    return unestimable(
+      `read replica added to replication group ${group}; its node type comes from the group`,
+    );
   }
   if (isUnknown(unknown, "engine")) return unestimable("engine is not known until apply");
   const nodes = read(num, attrs, unknown, "num_cache_nodes");
@@ -546,7 +556,10 @@ const elasticacheReplicationGroup: Estimator = (attrs, unknown, prefix, env) => 
   const clusters =
     setClusters === undefined && shards === undefined && replicas === undefined ? 1 : setClusters;
   let nodes: number | undefined;
-  if (typeof shards === "number" && shards > 1) {
+  // NumNodeGroups defaults to 1 per the ElastiCache CreateReplicationGroup API reference.
+  if (shards === undefined && typeof replicas === "number" && setClusters === undefined) {
+    nodes = replicas + 1;
+  } else if (typeof shards === "number" && shards > 1) {
     nodes = typeof replicas === "number" ? shards * (replicas + 1) : undefined;
   } else if (typeof clusters === "number") {
     nodes = clusters;
@@ -575,7 +588,18 @@ const AURORA_USAGE_EXCLUDED = [
   "Aurora backup storage beyond the free allowance",
 ];
 
-const rdsCluster: Estimator = (attrs) => {
+const rdsCluster: Estimator = (attrs, unknown) => {
+  const engine = str(attrs, "engine");
+  if (isUnknown(unknown, "engine")) return unestimable("engine is not known until apply");
+  // A Multi-AZ DB cluster (non-Aurora engine, instances described on the cluster) has no
+  // aws_rds_cluster_instance resources, so its cost would vanish here.
+  if (
+    (engine !== undefined && !engine.startsWith("aurora")) ||
+    str(attrs, "db_cluster_instance_class") !== undefined ||
+    isUnknown(unknown, "db_cluster_instance_class")
+  ) {
+    return unestimable("Multi-AZ DB clusters are not supported");
+  }
   const mode = str(attrs, "engine_mode");
   if (mode !== undefined && mode !== "provisioned") {
     return unestimable(`engine mode "${mode}" is not supported`);
@@ -652,13 +676,14 @@ const OPENSEARCH_STORAGE: Readonly<Record<string, string>> = {
 /** "r6g.large.search" / "t3.small.elasticsearch" -> "r6g.large" */
 const searchInstance = (type: string) => type.replace(/\.(search|elasticsearch)$/, "");
 
-const openSearchDomain: Estimator = (attrs, unknown, prefix) => {
+const openSearchDomain: Estimator = (attrs, unknown, prefix, env) => {
   const cluster = blocks(attrs, "cluster_config")[0] ?? {};
   const cu = blockUnknown(unknown, "cluster_config", 0);
   if (isUnknown(unknown, "cluster_config") || cu.instance_type === true) {
     return unestimable("instance type is not known until apply");
   }
-  const type = str(cluster, "instance_type") ?? "r5.large.search";
+  const type = str(cluster, "instance_type");
+  if (type === undefined) return unestimable("instance type is not set in cluster_config");
   const count = cu.instance_count === true ? undefined : (num(cluster, "instance_count") ?? 1);
   if (count === undefined) return unestimable("number of instances is not known until apply");
   const line = (usageType: string, amount: number, description: string): UsageLine => ({
@@ -676,7 +701,9 @@ const openSearchDomain: Estimator = (attrs, unknown, prefix) => {
     ),
   ];
   const partial: string[] = [];
-  if (cluster.dedicated_master_enabled === true) {
+  if (cu.dedicated_master_enabled === true) {
+    partial.push("dedicated master nodes are not known until apply");
+  } else if (cluster.dedicated_master_enabled === true) {
     const masterType = str(cluster, "dedicated_master_type");
     const masters = num(cluster, "dedicated_master_count");
     if (masterType === undefined || masters === undefined) {
@@ -695,7 +722,12 @@ const openSearchDomain: Estimator = (attrs, unknown, prefix) => {
 
   const ebs = blocks(attrs, "ebs_options")[0];
   const eu = blockUnknown(unknown, "ebs_options", 0);
-  if (ebs !== undefined && ebs.ebs_enabled === true) {
+  const ebsUnknown =
+    eu.ebs_enabled === true ||
+    (isUnknown(unknown, "ebs_options") && env.context.configured?.has("ebs_options") !== false);
+  if (ebsUnknown) {
+    partial.push("EBS storage is not known until apply");
+  } else if (ebs !== undefined && ebs.ebs_enabled === true) {
     const volumeType = eu.volume_type === true ? undefined : (str(ebs, "volume_type") ?? "gp2");
     const size = eu.volume_size === true ? undefined : num(ebs, "volume_size");
     const storage = volumeType === undefined ? undefined : OPENSEARCH_STORAGE[volumeType];

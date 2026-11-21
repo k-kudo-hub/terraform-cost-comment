@@ -158,12 +158,12 @@ Outside pull requests the action writes the estimate to the job summary only.
 
 | Resource | Priced | Not priced |
 |---|---|---|
-| `aws_instance` | Instance hours (Linux, on-demand, default tenancy), root and extra EBS volumes, a public IPv4 address when `associate_public_ip_address = true` | OS licenses other than Linux, data transfer |
+| `aws_instance` | Instance hours (Linux, on-demand, default tenancy), root and extra EBS volumes, a public IPv4 address when `associate_public_ip_address = true` | OS licenses other than Linux, a public IPv4 address the subnet assigns, data transfer |
 | `aws_ebs_volume` | Storage of gp2, gp3, io1, io2, st1, sc1, standard; gp3 IOPS and throughput above the free baseline; io1 IOPS; io2 IOPS in its three price tiers | Snapshots |
 | `aws_db_instance` | Instance hours for MySQL, PostgreSQL, MariaDB (Single-AZ and Multi-AZ); gp2, gp3, io1, io2, magnetic storage; io1 and io2 provisioned IOPS | gp3 performance above the baseline (listed as not estimated), backup storage, data transfer |
 | `aws_rds_cluster_instance` | Aurora MySQL and Aurora PostgreSQL instance hours, at the Standard or I/O-Optimized rate of the cluster | Aurora Serverless v2 (listed as not estimated) |
-| `aws_rds_cluster` | Nothing: its instances are priced as `aws_rds_cluster_instance` | Aurora storage and I/O, backup storage |
-| `aws_elasticache_cluster` | Node hours for Redis, Valkey and Memcached (a member of a replication group is priced with the group) | Backup storage, data transfer |
+| `aws_rds_cluster` | Nothing for Aurora: its instances are priced as `aws_rds_cluster_instance` | Aurora storage and I/O, backup storage; Multi-AZ DB clusters (non-Aurora, listed as not estimated) |
+| `aws_elasticache_cluster` | Node hours for Redis, Valkey and Memcached | A read replica added to a replication group with `replication_group_id` (listed as not estimated), backup storage, data transfer |
 | `aws_elasticache_replication_group` | Node hours for every node (`num_cache_clusters`, or shards × (replicas + 1)) | Backup storage, data transfer |
 | `aws_eks_cluster` | Cluster hours | Extended support surcharge, worker nodes (priced as their own resources) |
 | `aws_opensearch_domain` / `aws_elasticsearch_domain` | Data node and dedicated master node hours; gp2, gp3, io1, magnetic storage for every data node; io1 IOPS | UltraWarm nodes and gp3 performance above the baseline (listed as not estimated), snapshots, data transfer |
@@ -177,8 +177,8 @@ Prices are in USD before tax. Supported regions are all commercial AWS Regions; 
 Regions are not supported by the Pricing Calculator API.
 
 An attribute left out of the configuration takes its default: an EBS volume is gp2 (EC2 API), RDS
-storage is io1 when `iops` is set and gp3 otherwise (RDS API), a replication group is one Redis node
-(provider documentation). The RDS API states no default for Multi-AZ, so an instance without `multi_az`
+storage is io1 when `iops` is set and gp3 otherwise (RDS API), a replication group has one shard
+(ElastiCache API) of one node (provider documentation) and runs Redis (provider implementation). The RDS API states no default for Multi-AZ, so an instance without `multi_az`
 is priced as Single-AZ and the comment says so.
 
 These are listed under **Not estimated**, with the resource and the reason:
@@ -187,8 +187,9 @@ These are listed under **Not estimated**, with the resource and the reason:
 - Values that decide the price but are known only after apply, such as an instance type taken from
   another resource, or a root volume whose size comes from the AMI
 - Parts of a supported resource the action cannot price, such as UltraWarm nodes
-- An Aurora instance whose cluster is not in the plan: it is priced at the Standard rate, and the
-  comment notes that an I/O-Optimized cluster costs more
+- An Aurora instance whose cluster storage type cannot be read (the cluster is not in the plan, or its
+  storage type is known only after apply): it is priced at the Standard rate, and the comment notes that
+  an I/O-Optimized cluster costs more
 - Usage AWS returns no price for
 
 Charges that depend on usage (data transfer, LCU, NAT data processing) cannot be read from a plan.

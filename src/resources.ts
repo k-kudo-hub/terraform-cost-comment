@@ -1,10 +1,26 @@
-import { usageTypePrefix } from "./regions.js";
+import { type PrefixStyle, usageTypePrefix } from "./regions.js";
 import type { Attributes, UsageLine, UsageResult } from "./types.js";
 
 /** Hours in a month, the figure AWS Pricing Calculator uses. */
 export const HOURS_PER_MONTH = 730;
 
-type Estimator = (attrs: Attributes, unknown: Attributes, prefix: string) => UsageResult;
+/** Facts from elsewhere in the plan that one resource's price depends on. */
+export interface UsageContext {
+  /**
+   * storage_type of the Aurora cluster an aws_rds_cluster_instance belongs to:
+   * "aurora" (Standard), "aurora-iopt1" (I/O-Optimized), or undefined when it cannot be read.
+   */
+  auroraStorageType?: string;
+}
+
+interface Env {
+  region: string;
+  context: UsageContext;
+  /** Usage type prefix of the region in the billing style of a service. */
+  px(style?: PrefixStyle): string;
+}
+
+type Estimator = (attrs: Attributes, unknown: Attributes, prefix: string, env: Env) => UsageResult;
 
 const isUnknown = (unknown: Attributes, key: string): boolean => unknown[key] === true;
 
@@ -174,7 +190,7 @@ const ebsVolume: Estimator = (attrs, unknown, prefix) => {
 
 // ---------------------------------------------------------------- EC2
 
-const instance: Estimator = (attrs, unknown, prefix) => {
+const instance: Estimator = (attrs, unknown, prefix, env) => {
   const type = str(attrs, "instance_type");
   if (type === undefined || isUnknown(unknown, "instance_type")) {
     return unestimable("instance type is not known until apply");
@@ -222,6 +238,10 @@ const instance: Estimator = (attrs, unknown, prefix) => {
       if (result.unestimable !== undefined) partial.push(result.unestimable);
     });
   }
+  // Only an explicit request: left unset, the subnet decides and the plan cannot tell.
+  if (attrs.associate_public_ip_address === true) {
+    lines.push(publicIpv4(env, "public IPv4 address"));
+  }
   return {
     lines,
     partial,
@@ -238,10 +258,28 @@ const RDS_ENGINES: Readonly<Record<string, string>> = {
   mariadb: "CreateDBInstance:0018",
 };
 
-const RDS_STORAGE: Readonly<Record<string, { single: string; multi: string }>> = {
+interface RdsStorage {
+  single: string;
+  multi: string;
+  /** Provisioned IOPS usage types, for io1 and io2. */
+  iops?: { single: string; multi: string };
+}
+
+/** Verified against the Price List API and GetUsageLinesEstimatedCost (2026-11-21). */
+const RDS_STORAGE: Readonly<Record<string, RdsStorage>> = {
   gp2: { single: "RDS:GP2-Storage", multi: "RDS:Multi-AZ-GP2-Storage" },
   gp3: { single: "RDS:GP3-Storage", multi: "RDS:Multi-AZ-GP3-Storage" },
   standard: { single: "RDS:StorageUsage", multi: "RDS:Multi-AZ-StorageUsage" },
+  io1: {
+    single: "RDS:PIOPS-Storage",
+    multi: "RDS:Multi-AZ-PIOPS-Storage",
+    iops: { single: "RDS:PIOPS", multi: "RDS:Multi-AZ-PIOPS" },
+  },
+  io2: {
+    single: "RDS:PIOPS-Storage-IO2",
+    multi: "RDS:Multi-AZ-PIOPS-Storage-IO2",
+    iops: { single: "RDS:IO2-PIOPS", multi: "RDS:Multi-AZ-IO2-PIOPS" },
+  },
 };
 
 const dbInstance: Estimator = (attrs, unknown, prefix) => {
@@ -277,7 +315,7 @@ const dbInstance: Estimator = (attrs, unknown, prefix) => {
   } else {
     const storage = RDS_STORAGE[storageType];
     if (storage === undefined) {
-      partial.push(`${storageType} storage and its provisioned IOPS are not supported`);
+      partial.push(`${storageType} storage is not supported`);
     } else {
       lines.push({
         serviceCode: "AmazonRDS",
@@ -286,6 +324,20 @@ const dbInstance: Estimator = (attrs, unknown, prefix) => {
         amount: size,
         description: `${storageType} storage ${size} GB`,
       });
+      if (storage.iops !== undefined) {
+        const piops = read(num, attrs, unknown, "iops");
+        if (piops === "unknown") {
+          partial.push("provisioned IOPS is not known until apply");
+        } else if (piops !== undefined && piops > 0) {
+          lines.push({
+            serviceCode: "AmazonRDS",
+            usageType: prefix + (multiAz ? storage.iops.multi : storage.iops.single),
+            operation,
+            amount: piops,
+            description: `${piops} provisioned IOPS`,
+          });
+        }
+      }
       // An unset (computed) value means the baseline; only an explicit value above it can cost more.
       const iops = num(attrs, "iops");
       const throughput = num(attrs, "storage_throughput");
@@ -342,6 +394,298 @@ const loadBalancer: Estimator = (attrs, unknown, prefix) => {
   };
 };
 
+// ---------------------------------------------------------------- public IPv4 / VPC endpoints
+
+/** Amazon VPC bills us-east-1 usage with the USE1- prefix. */
+function publicIpv4(env: Env, description: string): UsageLine {
+  return {
+    serviceCode: "AmazonVPC",
+    usageType: `${env.px("use1")}PublicIPv4:InUseAddress`,
+    operation: "",
+    amount: HOURS_PER_MONTH,
+    description: `${description} (${HOURS_PER_MONTH} h)`,
+  };
+}
+
+const eip: Estimator = (_attrs, _unknown, _prefix, env) => ({
+  lines: [publicIpv4(env, "public IPv4 address")],
+  partial: [],
+  excluded: [],
+});
+
+/** Number of elements of a list attribute, even when the elements are known only after apply. */
+function listLength(attrs: Attributes, unknown: Attributes, key: string): number | undefined {
+  if (unknown[key] === true) return undefined;
+  const v = attrs[key];
+  return Array.isArray(v) ? v.length : undefined;
+}
+
+const vpcEndpoint: Estimator = (attrs, unknown, _prefix, env) => {
+  if (isUnknown(unknown, "vpc_endpoint_type")) {
+    return unestimable("endpoint type is not known until apply");
+  }
+  const type = str(attrs, "vpc_endpoint_type") ?? "Gateway";
+  if (type === "Gateway") {
+    return { lines: [], partial: [], excluded: [] };
+  }
+  const usageType =
+    type === "Interface"
+      ? "VpcEndpoint-Hours"
+      : type === "GatewayLoadBalancer"
+        ? "VpcEndpoint-GWLBE-Hours"
+        : undefined;
+  if (usageType === undefined) return unestimable(`endpoint type "${type}" is not supported`);
+  const subnets = listLength(attrs, unknown, "subnet_ids");
+  if (subnets === undefined) return unestimable("number of subnets is not known until apply");
+  return {
+    lines: [
+      {
+        serviceCode: "AmazonVPC",
+        usageType: `${env.px("use1")}${usageType}`,
+        operation: "VpcEndpoint",
+        amount: HOURS_PER_MONTH * subnets,
+        description: `${type} endpoint in ${subnets} subnet${subnets === 1 ? "" : "s"} (${HOURS_PER_MONTH} h each)`,
+      },
+    ],
+    partial: [],
+    excluded: ["VPC endpoint data processing (per GB)"],
+  };
+};
+
+// ---------------------------------------------------------------- ElastiCache
+
+/** Engine -> operation code, verified against the Price List API (2026-11-21). */
+const CACHE_ENGINES: Readonly<Record<string, string>> = {
+  memcached: "CreateCacheCluster:0001",
+  redis: "CreateCacheCluster:0002",
+  valkey: "CreateCacheCluster:Valkey",
+};
+
+function cacheNodes(
+  engine: string | undefined,
+  nodeType: string | undefined,
+  nodes: number,
+  prefix: string,
+): UsageResult {
+  const e = engine ?? "redis";
+  const operation = CACHE_ENGINES[e];
+  if (operation === undefined) return unestimable(`engine "${e}" is not supported`);
+  if (nodeType === undefined) return unestimable("node type is not known until apply");
+  return {
+    lines: [
+      {
+        serviceCode: "AmazonElastiCache",
+        usageType: `${prefix}NodeUsage:${nodeType}`,
+        operation,
+        amount: HOURS_PER_MONTH * nodes,
+        description: `${nodes} × ${nodeType} ${e} (${HOURS_PER_MONTH} h each)`,
+      },
+    ],
+    partial: [],
+    excluded: ["ElastiCache backup storage beyond the free allowance", "data transfer"],
+  };
+}
+
+const elasticacheCluster: Estimator = (attrs, unknown, prefix) => {
+  // A member of a replication group is priced with the group.
+  if (
+    str(attrs, "replication_group_id") !== undefined ||
+    isUnknown(unknown, "replication_group_id")
+  ) {
+    return { lines: [], partial: [], excluded: [] };
+  }
+  if (isUnknown(unknown, "engine")) return unestimable("engine is not known until apply");
+  const nodes = read(num, attrs, unknown, "num_cache_nodes");
+  if (nodes === "unknown") return unestimable("number of nodes is not known until apply");
+  return cacheNodes(
+    str(attrs, "engine"),
+    isUnknown(unknown, "node_type") ? undefined : str(attrs, "node_type"),
+    nodes ?? 1,
+    prefix,
+  );
+};
+
+const elasticacheReplicationGroup: Estimator = (attrs, unknown, prefix) => {
+  if (isUnknown(unknown, "engine")) return unestimable("engine is not known until apply");
+  const shards = read(num, attrs, unknown, "num_node_groups");
+  const replicas = read(num, attrs, unknown, "replicas_per_node_group");
+  const clusters = read(num, attrs, unknown, "num_cache_clusters");
+  let nodes: number | undefined;
+  if (typeof shards === "number" && shards > 1) {
+    nodes = typeof replicas === "number" ? shards * (replicas + 1) : undefined;
+  } else if (typeof clusters === "number") {
+    nodes = clusters;
+  } else if (typeof shards === "number" && typeof replicas === "number") {
+    nodes = shards * (replicas + 1);
+  }
+  if (nodes === undefined) return unestimable("number of nodes is not known until apply");
+  return cacheNodes(
+    str(attrs, "engine"),
+    isUnknown(unknown, "node_type") ? undefined : str(attrs, "node_type"),
+    nodes,
+    prefix,
+  );
+};
+
+// ---------------------------------------------------------------- Aurora
+
+/** Engine -> operation code, verified against the Price List API (2026-11-21). */
+const AURORA_ENGINES: Readonly<Record<string, string>> = {
+  "aurora-mysql": "CreateDBInstance:0016",
+  "aurora-postgresql": "CreateDBInstance:0021",
+};
+
+const AURORA_USAGE_EXCLUDED = [
+  "Aurora storage and I/O (depend on usage)",
+  "Aurora backup storage beyond the free allowance",
+];
+
+const rdsCluster: Estimator = (attrs) => {
+  const mode = str(attrs, "engine_mode");
+  if (mode !== undefined && mode !== "provisioned") {
+    return unestimable(`engine mode "${mode}" is not supported`);
+  }
+  // Instances are separate resources; the cluster itself is billed by storage and I/O used.
+  return { lines: [], partial: [], excluded: AURORA_USAGE_EXCLUDED };
+};
+
+const rdsClusterInstance: Estimator = (attrs, unknown, prefix, env) => {
+  const engine = str(attrs, "engine");
+  if (engine === undefined || isUnknown(unknown, "engine")) {
+    return unestimable("engine is not known until apply");
+  }
+  const operation = AURORA_ENGINES[engine];
+  if (operation === undefined) return unestimable(`engine "${engine}" is not supported`);
+  const cls = str(attrs, "instance_class");
+  if (cls === undefined || isUnknown(unknown, "instance_class")) {
+    return unestimable("instance class is not known until apply");
+  }
+  if (cls === "db.serverless") {
+    return unestimable("Aurora Serverless v2 is billed by the capacity it uses");
+  }
+  const storage = env.context.auroraStorageType;
+  const ioOptimized = storage === "aurora-iopt1";
+  const partial =
+    storage === undefined
+      ? [
+          "storage type of the cluster could not be read; priced as Aurora Standard (I/O-Optimized costs more per hour)",
+        ]
+      : [];
+  return {
+    lines: [
+      {
+        serviceCode: "AmazonRDS",
+        usageType: `${prefix}${ioOptimized ? "InstanceUsageIOOptimized" : "InstanceUsage"}:${cls}`,
+        operation,
+        amount: HOURS_PER_MONTH,
+        description: `${cls} ${engine}${ioOptimized ? " I/O-Optimized" : ""} (${HOURS_PER_MONTH} h)`,
+      },
+    ],
+    partial,
+    excluded: AURORA_USAGE_EXCLUDED,
+  };
+};
+
+// ---------------------------------------------------------------- EKS
+
+const eksCluster: Estimator = (_attrs, _unknown, _prefix, env) => ({
+  lines: [
+    {
+      serviceCode: "AmazonEKS",
+      usageType: `${env.px("use1")}AmazonEKS-Hours:perCluster`,
+      operation: "CreateOperation",
+      amount: HOURS_PER_MONTH,
+      description: `EKS cluster (${HOURS_PER_MONTH} h)`,
+    },
+  ],
+  partial: [],
+  excluded: [
+    "EKS extended support surcharge for Kubernetes versions past standard support",
+    "EKS worker nodes (priced as their own resources when they are aws_instance)",
+  ],
+});
+
+// ---------------------------------------------------------------- OpenSearch
+
+const OPENSEARCH_STORAGE: Readonly<Record<string, string>> = {
+  gp2: "ES:GP2-Storage",
+  gp3: "ES:GP3-Storage",
+  io1: "ES:PIOPS-Storage",
+  standard: "ES:Magnetic-Storage",
+};
+
+/** "r6g.large.search" / "t3.small.elasticsearch" -> "r6g.large" */
+const searchInstance = (type: string) => type.replace(/\.(search|elasticsearch)$/, "");
+
+const openSearchDomain: Estimator = (attrs, unknown, prefix) => {
+  const cluster = blocks(attrs, "cluster_config")[0] ?? {};
+  const cu = blockUnknown(unknown, "cluster_config", 0);
+  if (isUnknown(unknown, "cluster_config") || cu.instance_type === true) {
+    return unestimable("instance type is not known until apply");
+  }
+  const type = str(cluster, "instance_type") ?? "r5.large.search";
+  const count = cu.instance_count === true ? undefined : (num(cluster, "instance_count") ?? 1);
+  if (count === undefined) return unestimable("number of instances is not known until apply");
+  const line = (usageType: string, amount: number, description: string): UsageLine => ({
+    serviceCode: "AmazonES",
+    usageType: prefix + usageType,
+    operation: "ESDomain",
+    amount,
+    description,
+  });
+  const lines = [
+    line(
+      `ESInstance:${searchInstance(type)}`,
+      HOURS_PER_MONTH * count,
+      `${count} × ${type} data node${count === 1 ? "" : "s"} (${HOURS_PER_MONTH} h each)`,
+    ),
+  ];
+  const partial: string[] = [];
+  if (cluster.dedicated_master_enabled === true) {
+    const masterType = str(cluster, "dedicated_master_type");
+    const masters = num(cluster, "dedicated_master_count");
+    if (masterType === undefined || masters === undefined) {
+      partial.push("dedicated master nodes are not known until apply");
+    } else {
+      lines.push(
+        line(
+          `ESInstance:${searchInstance(masterType)}`,
+          HOURS_PER_MONTH * masters,
+          `${masters} × ${masterType} master node${masters === 1 ? "" : "s"} (${HOURS_PER_MONTH} h each)`,
+        ),
+      );
+    }
+  }
+  if (cluster.warm_enabled === true) partial.push("UltraWarm nodes are not supported");
+
+  const ebs = blocks(attrs, "ebs_options")[0];
+  const eu = blockUnknown(unknown, "ebs_options", 0);
+  if (ebs !== undefined && ebs.ebs_enabled === true) {
+    const volumeType = eu.volume_type === true ? undefined : (str(ebs, "volume_type") ?? "gp2");
+    const size = eu.volume_size === true ? undefined : num(ebs, "volume_size");
+    const storage = volumeType === undefined ? undefined : OPENSEARCH_STORAGE[volumeType];
+    if (size === undefined || volumeType === undefined) {
+      partial.push("EBS storage is not known until apply");
+    } else if (storage === undefined) {
+      partial.push(`${volumeType} storage is not supported`);
+    } else {
+      lines.push(line(storage, size * count, `${volumeType} storage ${size} GB × ${count}`));
+      const iops = num(ebs, "iops");
+      if (volumeType === "io1") {
+        if (eu.iops === true) partial.push("provisioned IOPS is not known until apply");
+        else if (iops !== undefined && iops > 0) {
+          lines.push(line("ES:PIOPS", iops * count, `${iops} provisioned IOPS × ${count}`));
+        }
+      }
+      const throughput = num(ebs, "throughput");
+      if (volumeType === "gp3" && ((iops ?? 0) > 3000 || (throughput ?? 0) > 125)) {
+        partial.push("gp3 IOPS and throughput above the baseline are not supported");
+      }
+    }
+  }
+  return { lines, partial, excluded: ["OpenSearch snapshots and data transfer"] };
+};
+
 // ---------------------------------------------------------------- registry
 
 const ESTIMATORS: Readonly<Record<string, Estimator>> = {
@@ -351,6 +695,15 @@ const ESTIMATORS: Readonly<Record<string, Estimator>> = {
   aws_nat_gateway: natGateway,
   aws_lb: loadBalancer,
   aws_alb: loadBalancer,
+  aws_eip: eip,
+  aws_vpc_endpoint: vpcEndpoint,
+  aws_elasticache_cluster: elasticacheCluster,
+  aws_elasticache_replication_group: elasticacheReplicationGroup,
+  aws_rds_cluster: rdsCluster,
+  aws_rds_cluster_instance: rdsClusterInstance,
+  aws_eks_cluster: eksCluster,
+  aws_opensearch_domain: openSearchDomain,
+  aws_elasticsearch_domain: openSearchDomain,
 };
 
 export function supportedTypes(): string[] {
@@ -375,8 +728,10 @@ export function estimateUsage(
   attrs: Attributes,
   unknown: Attributes,
   region: string,
+  context: UsageContext = {},
 ): UsageResult {
   const estimator = ESTIMATORS[type];
   if (estimator === undefined) return unestimable(`resource type ${type} is not supported`);
-  return estimator(attrs, unknown, usageTypePrefix(region));
+  const env: Env = { region, context, px: (style) => usageTypePrefix(region, style) };
+  return estimator(attrs, unknown, usageTypePrefix(region), env);
 }

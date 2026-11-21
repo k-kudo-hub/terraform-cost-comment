@@ -217,6 +217,27 @@ describe("renderComment", () => {
     expect(body).not.toContain("[!CAUTION]");
   });
 
+  it("leaves resources with nothing priced out of the table", () => {
+    const body = renderComment(
+      estimate({
+        resources: [
+          resource({}),
+          resource({
+            address: "aws_vpc_endpoint.s3",
+            type: "aws_vpc_endpoint",
+            after: 0,
+            delta: 0,
+            lines: [],
+            excluded: [],
+          }),
+        ],
+      }),
+      100,
+      { ...ctx, language: "en" },
+    );
+    expect(body).not.toContain("aws_vpc_endpoint.s3");
+  });
+
   it("writes Japanese when asked", () => {
     const body = renderComment(estimate(), 10, { ...ctx, language: "ja" });
     expect(body).toContain("月額");

@@ -45,7 +45,14 @@ export function supportedRegions(): string[] {
   return Object.keys(REGION_PREFIX);
 }
 
-export function usageTypePrefix(region: string): string {
+/**
+ * Most services bill us-east-1 usage with no prefix, but some use "USE1-" there
+ * (Amazon EKS and Amazon VPC, checked in the Price List API on 2026-11-21).
+ */
+export type PrefixStyle = "default" | "use1";
+
+export function usageTypePrefix(region: string, style: PrefixStyle = "default"): string {
+  if (style === "use1" && region === "us-east-1") return "USE1-";
   const prefix = REGION_PREFIX[region];
   if (prefix === undefined) {
     throw new Error(

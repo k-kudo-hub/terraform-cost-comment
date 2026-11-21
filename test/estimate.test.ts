@@ -175,8 +175,9 @@ describe("estimatePlan", () => {
           {
             engine: "mysql",
             instance_class: "db.t3.micro",
-            allocated_storage: 100,
-            storage_type: "io1",
+            allocated_storage: 500,
+            storage_type: "gp3",
+            iops: 15000,
           },
           {
             engine: "mysql",
@@ -190,7 +191,7 @@ describe("estimatePlan", () => {
       pricer,
     );
     expect(r.resources[0]?.partial).toEqual([
-      "before the change: io1 storage and its provisioned IOPS are not supported",
+      "before the change: gp3 IOPS and throughput above the baseline are not supported",
     ]);
   });
 
@@ -243,5 +244,131 @@ describe("detectRegion", () => {
 
   it("returns undefined when the region cannot be read", () => {
     expect(detectRegion({})).toBeUndefined();
+  });
+});
+
+describe("Aurora cluster storage type", () => {
+  const instance = (after: Record<string, unknown>, unknown: Record<string, unknown> = {}) =>
+    change(
+      "aws_rds_cluster_instance.writer",
+      "aws_rds_cluster_instance",
+      ["create"],
+      null,
+      { engine: "aurora-mysql", instance_class: "db.r6g.large", ...after },
+      unknown,
+    );
+  const cluster = (
+    address: string,
+    after: Record<string, unknown>,
+    unknown: Record<string, unknown> = {},
+  ) =>
+    change(
+      address,
+      "aws_rds_cluster",
+      ["create"],
+      null,
+      { engine: "aurora-mysql", ...after },
+      unknown,
+    );
+  const usageTypeOf = async (p: TerraformPlan) =>
+    (await estimatePlan(p, "us-east-1", pricer)).resources.find(
+      (r) => r.type === "aws_rds_cluster_instance",
+    );
+
+  it("matches the cluster by its identifier", async () => {
+    const r = await usageTypeOf(
+      plan(
+        cluster("aws_rds_cluster.main", {
+          cluster_identifier: "main",
+          storage_type: "aurora-iopt1",
+        }),
+        instance({ cluster_identifier: "main" }),
+      ),
+    );
+    expect(r?.lines[0]?.usageType).toBe("InstanceUsageIOOptimized:db.r6g.large");
+    expect(r?.partial).toEqual([]);
+  });
+
+  it("follows the reference in the configuration when the identifier is known only after apply", async () => {
+    const p: TerraformPlan = {
+      ...plan(
+        cluster(
+          "aws_rds_cluster.main",
+          { storage_type: "aurora-iopt1" },
+          { cluster_identifier: true },
+        ),
+        instance({}, { cluster_identifier: true }),
+      ),
+      configuration: {
+        root_module: {
+          resources: [
+            {
+              address: "aws_rds_cluster.main",
+              expressions: { storage_type: { constant_value: "aurora-iopt1" } },
+            },
+            {
+              address: "aws_rds_cluster_instance.writer",
+              expressions: {
+                cluster_identifier: {
+                  references: ["aws_rds_cluster.main.id", "aws_rds_cluster.main"],
+                },
+              },
+            },
+          ],
+        },
+      },
+    };
+    expect((await usageTypeOf(p))?.lines[0]?.usageType).toBe(
+      "InstanceUsageIOOptimized:db.r6g.large",
+    );
+  });
+
+  it("follows references inside modules", async () => {
+    const p: TerraformPlan = {
+      resource_changes: [
+        {
+          ...cluster(
+            "module.db.aws_rds_cluster.this[0]",
+            {},
+            { cluster_identifier: true, storage_type: true },
+          ),
+        },
+        {
+          ...instance({}, { cluster_identifier: true }),
+          address: "module.db.aws_rds_cluster_instance.writer",
+        },
+      ],
+      configuration: {
+        root_module: {
+          module_calls: {
+            db: {
+              module: {
+                resources: [
+                  { address: "aws_rds_cluster.this", expressions: {} },
+                  {
+                    address: "aws_rds_cluster_instance.writer",
+                    expressions: {
+                      cluster_identifier: {
+                        references: ["aws_rds_cluster.this[0].id", "aws_rds_cluster.this"],
+                      },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    };
+    const r = await usageTypeOf(p);
+    // storage_type is not set in the configuration, so the cluster is Aurora Standard.
+    expect(r?.lines[0]?.usageType).toBe("InstanceUsage:db.r6g.large");
+    expect(r?.partial).toEqual([]);
+  });
+
+  it("reports the instance when its cluster cannot be found", async () => {
+    const r = await usageTypeOf(plan(instance({ cluster_identifier: "elsewhere" })));
+    expect(r?.lines[0]?.usageType).toBe("InstanceUsage:db.r6g.large");
+    expect(r?.partial[0]).toContain("I/O-Optimized");
   });
 });

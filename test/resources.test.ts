@@ -188,18 +188,6 @@ describe("aws_db_instance", () => {
     expect(r.unestimable).toContain("oracle-ee");
   });
 
-  it("reports provisioned IOPS storage as excluded", () => {
-    const r = usage("aws_db_instance", {
-      engine: "mysql",
-      instance_class: "db.t3.micro",
-      allocated_storage: 100,
-      storage_type: "io1",
-      iops: 1000,
-    });
-    expect(r.lines).toHaveLength(1);
-    expect(r.partial).toEqual(["io1 storage and its provisioned IOPS are not supported"]);
-  });
-
   it("does not flag gp3 storage left at its baseline performance", () => {
     const r = usage(
       "aws_db_instance",

@@ -1,3 +1,4 @@
+import { auroraStorageType, type ConfigModule } from "./plan-config.js";
 import type { Pricer } from "./pricing.js";
 import { estimateUsage, isAwsType } from "./resources.js";
 import type { Attributes, UsageLine } from "./types.js";
@@ -7,6 +8,7 @@ export interface TerraformPlan {
   resource_changes?: ResourceChange[];
   variables?: Record<string, { value?: unknown }>;
   configuration?: {
+    root_module?: ConfigModule;
     provider_config?: Record<
       string,
       {
@@ -106,15 +108,31 @@ export async function estimatePlan(
       otherProviderCount += 1;
       continue;
     }
+    const context =
+      rc.type === "aws_rds_cluster_instance"
+        ? {
+            auroraStorageType: auroraStorageType(
+              rc,
+              plan.resource_changes ?? [],
+              plan.configuration?.root_module,
+            ),
+          }
+        : {};
     const sides = {
       before:
         action === "create"
           ? undefined
-          : estimateUsage(rc.type, rc.change.before ?? {}, {}, region),
+          : estimateUsage(rc.type, rc.change.before ?? {}, {}, region, context),
       after:
         action === "delete"
           ? undefined
-          : estimateUsage(rc.type, rc.change.after ?? {}, rc.change.after_unknown ?? {}, region),
+          : estimateUsage(
+              rc.type,
+              rc.change.after ?? {},
+              rc.change.after_unknown ?? {},
+              region,
+              context,
+            ),
     };
     const reason = sides.after?.unestimable ?? sides.before?.unestimable;
     if (reason !== undefined) {

@@ -211,21 +211,24 @@ export function renderComment(
   );
   if (expected !== undefined) out.push(`| ${m.summary.expected} | ${signed(expected)} |`);
 
-  if (estimate.resources.length > 0) {
+  // Resources with nothing priced (a gateway endpoint, an Aurora cluster billed by usage) add
+  // nothing to the table; what they leave out is still listed below.
+  const priced = estimate.resources.filter((r) => r.lines.length > 0 || r.delta !== 0);
+  if (priced.length > 0) {
     out.push(
       "",
       m.byResource,
       "",
       `| ${m.columns.join(" | ")} |`,
       "|---|---|---:|---:|---:|",
-      ...estimate.resources.map(
+      ...priced.map(
         (r) =>
           `| \`${cell(r.address)}\` | ${m.actions[r.action]} | ${money(r.before)} | ${money(r.after)} | **${signed(r.delta)}** |`,
       ),
       "",
       `<details><summary>${m.pricedUsage}</summary>`,
       "",
-      ...estimate.resources.flatMap((r) => [
+      ...priced.flatMap((r) => [
         `- \`${cell(r.address)}\``,
         ...r.lines.map((l) => `  - ${cell(l.description)}: ${money(l.cost)}`),
       ]),

@@ -140,12 +140,12 @@ plan に使うロールには読み取りの権限だけを与え、信頼ポリ
           terraform init -input=false
           terraform plan -input=false -out=tfplan
           terraform show -json tfplan > plan.json
-      # plan のロールを手放し、GetUsageLinesEstimatedCost だけを呼べるロールに切り替える
+      # GetUsageLinesEstimatedCost だけを呼べるロールに切り替える
+      # （環境変数の認証情報は、plan のロールのものから上書きされる）
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::123456789012:role/terraform-cost-pricing
           aws-region: ap-northeast-1
-          unset-current-credentials: true
       - uses: k-kudo-hub/terraform-cost-comment@v0
         with:
           plan-json: plan.json

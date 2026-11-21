@@ -145,12 +145,12 @@ action, so the step that talks to the Pricing Calculator API cannot read anythin
           terraform init -input=false
           terraform plan -input=false -out=tfplan
           terraform show -json tfplan > plan.json
-      # Drop the plan role and take a role that can only call GetUsageLinesEstimatedCost.
+      # Take a role that can only call GetUsageLinesEstimatedCost.
+      # Its credentials overwrite the plan role's in the environment.
       - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::123456789012:role/terraform-cost-pricing
           aws-region: ap-northeast-1
-          unset-current-credentials: true
       - uses: k-kudo-hub/terraform-cost-comment@v0
         with:
           plan-json: plan.json
@@ -161,8 +161,8 @@ policy to pull requests of your repository in the same way as the plan role.
 
 **Think before using `AFTER_DISCOUNTS`.** With `rate-type: AFTER_DISCOUNTS` or
 `AFTER_DISCOUNTS_AND_COMMITMENTS`, the comment shows your account's prices after discounts (with the
-latter, also after Savings Plans and Reserved Instances). Anyone who can read the pull request can then work out the discounts your
-organization has with AWS. Keep the default `BEFORE_DISCOUNTS` (public on-demand prices) unless every
+latter, also after Savings Plans and Reserved Instances). Anyone who can read the pull request can
+then work out the discounts your organization has with AWS. Keep the default `BEFORE_DISCOUNTS` (public on-demand prices) unless every
 reader of the repository may see those rates.
 
 ### Inputs
